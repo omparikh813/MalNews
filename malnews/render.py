@@ -9,7 +9,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from weasyprint import HTML
 
-from .enrich import CVE_ID_RE, CveInfo
+from .enrich import CVE_ID_RE, CveInfo, KevEntry
 from .images import StoryImage
 from .models import Story
 from .rank import similar_titles
@@ -49,7 +49,35 @@ def _cve_view(i: CveInfo) -> dict | None:
         "band": i.band,
         "status": i.status,
         "kev": i.kev,
+        "kev_detail": _kev_detail(i.kev_entry),
         "epss": f"{i.epss:.0%}" if i.epss is not None else None,
+    }
+
+
+def _day(d) -> str:
+    return f"{d:%b} {d.day}"
+
+
+def _kev_detail(k: KevEntry | None) -> str | None:
+    if not k:
+        return None
+    parts = [f"{k.vendor} {k.product}".strip()]
+    if k.due:
+        parts.append(f"federal fix due {_day(k.due)}")
+    if k.ransomware:
+        parts.append("used in ransomware")
+    return " · ".join(p for p in parts if p)
+
+
+def _roundup_view(i: CveInfo) -> dict:
+    k = i.kev_entry
+    v = _cve_view(i)
+    return {
+        **v,
+        "vendor": f"{k.vendor} {k.product}".strip()[:38] if k else "",
+        "name": (k.name[:56].rstrip() + "…") if k and len(k.name) > 56 else (k.name if k else ""),
+        "added": _day(k.added) if k and k.added else "",
+        "ransomware": bool(k and k.ransomware),
     }
 
 
@@ -133,6 +161,29 @@ def sections(stories: list[Story], sotw: StoryRecord | None, cfg: Config) -> tup
     return top, [s for s in rest if s.zero_day], [s for s in rest if not s.zero_day]
 
 
+SEVERITY_ORDER = ("Critical", "High", "Medium", "Low", "None")
+
+
+def snapshot(views: list[dict], zero_days: int) -> dict | None:
+    """Counts of the distinct CVEs printed in the edition, for the strip under the masthead."""
+    cves = {c["id"]: c for v in views for c in v["cves"]}.values()
+    if not cves:
+        return None
+    counts = {name: sum(1 for c in cves if c["band"] == name) for name in SEVERITY_ORDER}
+    counts["Pending"] = sum(1 for c in cves if c["score"] is None)
+    total = len(cves)
+    shown = {name: n for name, n in counts.items() if n}
+    raw = {name: max(n / total * 100, 11.0) for name, n in shown.items()}
+    scale = 100 / sum(raw.values())
+    scores = [float(c["score"]) for c in cves if c["score"] is not None]
+    return {
+        "segments": [{"label": name, "count": n, "width": f"{raw[name] * scale:.1f}%", "cls": name.lower()}
+                     for name, n in shown.items()],
+        "total": total, "kev": sum(1 for c in cves if c["kev"]), "zero_days": zero_days,
+        "highest": f"{max(scores):.1f}" if scores else None,
+    }
+
+
 FIXED_WORDS = 150  # masthead, section headings, footer
 
 
@@ -146,7 +197,7 @@ class Edition:
 def build_edition(stories: list[Story], cfg: Config, now: datetime, source_names: list[str],
                   sotw: StoryOfWeek | None = None, replaced: StoryRecord | None = None,
                   infos: dict[str, CveInfo] | None = None, replaced_summary: str | None = None,
-                  images: dict[str, StoryImage] | None = None) -> Edition:
+                  images: dict[str, StoryImage] | None = None, kev_candidates: list[CveInfo] | None = None) -> Edition:
     """Every story shown has an AI summary; stories without one are left out."""
     infos, images = infos or {}, images or {}
     stories = [s for s in stories if s.summary]
@@ -177,6 +228,11 @@ def build_edition(stories: list[Story], cfg: Config, now: datetime, source_names
         "headlines": other_v,
         "sources": source_names,
     }
+    views = [v for v in (weekly, *top_v, *threat_v, *other_v) if v]
+    context["snapshot"] = snapshot(views, sum(1 for s in (*top, *threats, *others) if s.zero_day))
+    printed = {c["id"] for v in views for c in v["cves"]}
+    context["roundup"] = [_roundup_view(i) for i in (kev_candidates or []) if i.id not in printed][
+        : cfg.roundup.max_rows]
     return Edition(context, words, dropped)
 
 
@@ -184,20 +240,56 @@ def build_edition(stories: list[Story], cfg: Config, now: datetime, source_names
 class RenderResult:
     pdf: bytes
     blocked: list[str]
+    pages: int = 0
+    roundup_rows: int = 0
 
 
-def render_html_to_pdf(html: str, image_dir: Path | None = None) -> RenderResult:
-    """The renderer can read only templates/, fonts/ and the image folder."""
+def _layout(html: str, image_dir: Path | None) -> tuple[HTML, RenderURLFetcher]:
     fetcher = RenderURLFetcher([TEMPLATES, FONTS, *([image_dir] if image_dir else [])])
-    doc = HTML(string=html, base_url=str(TEMPLATES) + "/", url_fetcher=fetcher).render()
-    meta = doc.metadata
+    return HTML(string=html, base_url=str(TEMPLATES) + "/", url_fetcher=fetcher), fetcher
+
+
+def _finish(document, fetcher: RenderURLFetcher, rows: int = 0) -> RenderResult:
+    meta = document.metadata
     meta.attachments = []  # never embed files, whatever the HTML asks for
     meta.authors, meta.keywords, meta.description = [], [], None
     meta.generator = None
     meta.custom = {}
-    return RenderResult(doc.write_pdf(), fetcher.blocked)
+    return RenderResult(document.write_pdf(), fetcher.blocked, len(document.pages), rows)
 
 
-def render_pdf(edition: Edition, image_dir: Path | None = None) -> RenderResult:
-    html = jinja_env().get_template("edition.html.j2").render(**edition.context)
-    return render_html_to_pdf(html, image_dir)
+def render_html_to_pdf(html: str, image_dir: Path | None = None) -> RenderResult:
+    """The renderer can read only templates/, fonts/ and the image folder."""
+    page, fetcher = _layout(html, image_dir)
+    return _finish(page.render(), fetcher)
+
+
+def fit_rows(pages_for, total: int, min_rows: int) -> int:
+    """The most rows that keep the page count at what it is with none; 0 if even min_rows would add a page."""
+    if total < min_rows:
+        return 0
+    base = pages_for(0)
+    if pages_for(min_rows) > base:
+        return 0
+    low, high, best = min_rows, total, min_rows
+    while low <= high:
+        mid = (low + high) // 2
+        if pages_for(mid) <= base:
+            best, low = mid, mid + 1
+        else:
+            high = mid - 1
+    return best
+
+
+def render_pdf(edition: Edition, image_dir: Path | None = None, min_rows: int = 4) -> RenderResult:
+    """Renders the edition, with as many Known Exploited roundup rows as fit on the last page."""
+    template = jinja_env().get_template("edition.html.j2")
+    rows = edition.context["roundup"]
+
+    def layout(n: int):
+        page, fetcher = _layout(template.render(**{**edition.context, "roundup": rows[:n]}), image_dir)
+        return page.render(), fetcher
+
+    fit = fit_rows(lambda n: len(layout(n)[0].pages), len(rows), min_rows)
+    document, fetcher = layout(fit)
+    return _finish(document, fetcher, fit)

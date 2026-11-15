@@ -18,6 +18,13 @@
   <div class="generated">Generated {{ generated }}</div>
 </header>
 
+{% if snapshot %}
+<section class="snapshot">
+  <div class="snap-text"><b>Today’s CVEs</b> · {{ snapshot.total }} in this edition · {{ snapshot.kev }} Known Exploited · {{ snapshot.zero_days }} zero-day{{ "" if snapshot.zero_days == 1 else "s" }}{% if snapshot.highest %} · highest score {{ snapshot.highest }}{% endif %}</div>
+  <table class="bar"><tr>{% for seg in snapshot.segments %}<td class="sev-{{ seg.cls }}" style="width: {{ seg.width }}">{{ seg.label }} {{ seg.count }}</td>{% endfor %}</tr></table>
+</section>
+{% endif %}
+
 {% macro severity(c) %}
 {% if c.score %}<span class="badge sev-{{ c.band | lower }}">{{ c.band }} {{ c.score }}</span>
 {% elif c.status == "pending" %}<span class="badge sev-none">Score pending</span>
@@ -33,7 +40,7 @@
 {% if s.cves %}
 <ul class="cves">
   {% for c in s.cves %}
-  <li>{{ severity(c) }} <a href="{{ c.cve_url }}">{{ c.id }}</a> · <a href="{{ c.nvd_url }}">NVD</a>{% if c.kev %} · Known Exploited{% endif %}{% if c.epss %} · EPSS {{ c.epss }}{% endif %}</li>
+  <li>{{ severity(c) }} <a href="{{ c.cve_url }}">{{ c.id }}</a> · <a href="{{ c.nvd_url }}">NVD</a>{% if c.kev %} · Known Exploited{% if c.kev_detail %}: {{ c.kev_detail }}{% endif %}{% endif %}{% if c.epss %} · EPSS {{ c.epss }}{% endif %}</li>
   {% endfor %}
 </ul>
 {% endif %}
@@ -79,22 +86,47 @@
 </section>
 {% endif %}
 
-<main class="paper">
-  {% if news_of_the_day %}
-  <h2 class="section">News of the Day</h2>
-  {% for s in news_of_the_day %}{{ story(s, "lead" if loop.first else "") }}{% endfor %}
-  {% endif %}
+{# One story spans the full width; several flow in two columns, and short sections keep each story whole. #}
+{% macro block(items, cls="", few=4) %}
+{% if items | length == 1 %}{{ story(items[0], cls ~ " solo") }}
+{% elif items %}<div class="paper{{ ' few' if items | length < few }}">{% for s in items %}{{ story(s, cls) }}{% endfor %}</div>{% endif %}
+{% endmacro %}
 
-  {% if new_threats %}
-  <h2 class="section">New Threats</h2>
-  {% for s in new_threats %}{{ story(s, "threat") }}{% endfor %}
-  {% endif %}
+{% if news_of_the_day %}
+<h2 class="section">News of the Day</h2>
+{{ story(news_of_the_day[0], "lead") }}
+{{ block(news_of_the_day[1:], "", 5) }}
+{% endif %}
 
-  {% if headlines %}
-  <h2 class="section">Other Headlines</h2>
-  {% for s in headlines %}{{ story(s) }}{% endfor %}
-  {% endif %}
-</main>
+{% if new_threats %}
+<h2 class="section">New Threats</h2>
+{{ block(new_threats, "threat") }}
+{% endif %}
+
+{% if headlines %}
+<h2 class="section">Other Headlines</h2>
+<div class="paper">{% for s in headlines %}{{ story(s) }}{% endfor %}</div>
+{% endif %}
+
+{% if roundup %}
+<section class="roundup">
+  <h2 class="section">Known Exploited Roundup</h2>
+  <table>
+    <tr><th>CVE</th><th>Vendor and product</th><th>Vulnerability</th><th>Added</th><th>Score</th><th>EPSS</th></tr>
+    {% for r in roundup %}
+    <tr>
+      <td><a href="{{ r.cve_url }}">{{ r.id }}</a> · <a href="{{ r.nvd_url }}">NVD</a></td>
+      <td>{{ r.vendor }}</td>
+      <td>{{ r.name }}{% if r.ransomware %} †{% endif %}</td>
+      <td>{{ r.added }}</td>
+      <td>{{ severity(r) }}</td>
+      <td>{{ r.epss or "–" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="note">The newest additions to CISA’s Known Exploited Vulnerabilities catalog that are not covered above. † Used in ransomware campaigns.</p>
+</section>
+{% endif %}
 
 <footer>
   <p><b>Sources:</b> {{ sources | join(", ") }}.</p>

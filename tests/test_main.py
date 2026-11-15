@@ -204,3 +204,19 @@ def test_image_survives_in_state_for_the_week(tmp_path, env, fake_world, no_netw
     assert main.main([], out_dir=tmp_path, state_path=state_path) == 0
     story = json.loads(state_path.read_text())["story_of_week"]["story"]
     assert story["image_url"] == "https://img.example.com/cisa.png" and story["image_credit"] == "CISA"
+
+
+def test_roundup_lists_new_known_exploited_cves(tmp_path, env, fake_world, no_network):
+    rows = [{"cveID": f"CVE-2026-{5000 + i}", "vendorProject": "Acme", "product": f"Gateway {i}", "vulnerabilityName": "Bypass",
+             "dateAdded": f"2026-11-{10 + i:02d}", "dueDate": "2026-12-01", "knownRansomwareCampaignUse": "Known"} for i in range(6)]
+    rows.append({"cveID": "CVE-2026-1111", "vendorProject": "Northwind", "product": "VPN", "vulnerabilityName": "Bypass",
+                 "dateAdded": "2026-11-15", "dueDate": "2026-12-01", "knownRansomwareCampaignUse": "Unknown"})
+    fake_world.fetcher.pages[KEV] = json.dumps({"vulnerabilities": rows}).encode()
+    fake_world.fetcher.pages["https://img.example.com/cisa.png"] = 404  # no photos: leaves room on the page
+    fake_world.fetcher.pages["https://img.example.com/krebs.jpg"] = 404
+    assert main.main([], out_dir=tmp_path, state_path=tmp_path / "state.json") == 0
+    text = pdf_text_of(tmp_path / "latest.pdf")
+    flat = text.replace(" ", "").lower()
+    assert "knownexploitedroundup" in flat and "CVE-2026-5005" in text and "Acme Gateway 0" in text
+    assert text.count("CVE-2026-1111") <= 3  # already covered by a story, so not repeated in the roundup table
+    assert f"{NVD}?cveId=CVE-2026-5000" in fake_world.fetcher.requested

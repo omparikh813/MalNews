@@ -137,11 +137,15 @@ def run(max_requests: int | None, out_dir: Path, state_path: Path) -> int:
     if top and (pic := top[0].image_source):
         wanted[top[0].id] = (pic.image_url, pic.source, pic.url)
 
+    covered = {c for s in stories if s.summary for c in s.cves} | (set(sotw.story.cves) if sotw else set())
+    recent = enricher.recent_kev(covered, cfg.roundup.max_rows)
+    roundup = enricher.lookup(recent)
+
     with tempfile.TemporaryDirectory(prefix="malnews-img-") as tmp:
         images = story_images(fetcher, wanted, Path(tmp), cfg)
         edition = build_edition(stories, cfg, now, [s.name for s in sources], sotw, outcome.replaced, infos,
-                                replaced_summary, images)
-        result = render_pdf(edition, Path(tmp))
+                                replaced_summary, images, [roundup[c] for c in recent if c in roundup])
+        result = render_pdf(edition, Path(tmp), cfg.roundup.min_rows)
     if result.blocked:
         log.warning("renderer blocked %d resource request(s)", len(result.blocked))
     write_site(result.pdf, out_dir, today.isoformat())  # only reached when every step succeeded
@@ -175,7 +179,7 @@ def run(max_requests: int | None, out_dir: Path, state_path: Path) -> int:
         f"{st.failed} left out (no usable summary), {st.flagged} left out (moderation), "
         f"{st.skipped} left out (request cap)"
         + (f" ({rate:.0%} usable)" if rate is not None else ""),
-        f"- Images: {len(images)} of {len(wanted)}",
+        f"- Images: {len(images)} of {len(wanted)}; Known Exploited roundup rows: {result.roundup_rows}; pages: {result.pages}",
         f"- Words: {edition.words}; PDF: {len(result.pdf) / 1024:.0f} KB",
     ])
     return 0

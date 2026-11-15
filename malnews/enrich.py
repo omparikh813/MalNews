@@ -6,8 +6,9 @@ import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
 
-from .safety import FetchError, HTTPStatusError
+from .safety import FetchError, HTTPStatusError, clean_text
 from .settings import Config
 
 log = logging.getLogger(__name__)
@@ -24,6 +25,37 @@ def band(score: float | None) -> str | None:
 
 
 @dataclass
+class KevEntry:
+    id: str
+    vendor: str
+    product: str
+    name: str
+    added: date | None
+    due: date | None
+    ransomware: bool
+
+
+def _date(value) -> date | None:
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def parse_kev(data: dict) -> dict[str, KevEntry]:
+    entries = {}
+    for v in data.get("vulnerabilities", []):
+        if not isinstance(v, dict) or not CVE_ID_RE.match(str(v.get("cveID", ""))):
+            continue
+        entries[v["cveID"]] = KevEntry(
+            id=v["cveID"], vendor=clean_text(v.get("vendorProject"), 60), product=clean_text(v.get("product"), 60),
+            name=clean_text(v.get("vulnerabilityName"), 120), added=_date(v.get("dateAdded")),
+            due=_date(v.get("dueDate")), ransomware=v.get("knownRansomwareCampaignUse") == "Known",
+        )
+    return entries
+
+
+@dataclass
 class CveInfo:
     id: str
     status: str  # "scored", "pending" (no NVD score yet) or "unavailable" (NVD unreachable)
@@ -31,6 +63,7 @@ class CveInfo:
     cvss_version: str | None = None
     kev: bool = False
     epss: float | None = None
+    kev_entry: KevEntry | None = None
 
     @property
     def band(self) -> str | None:
@@ -68,7 +101,7 @@ class Enricher:
             self.e.nvd_interval_seconds if self.nvd_key else self.e.nvd_interval_no_key)
         self.cache: dict[str, CveInfo] = {}
         self.nvd_down = False
-        self.kev: set[str] | None = None
+        self.kev_entries: dict[str, KevEntry] | None = None
         self.kev_ok = True
         self.lookups = 0
         self._last = 0.0
@@ -80,15 +113,21 @@ class Enricher:
             raise ValueError("unexpected JSON")
         return data
 
-    def _load_kev(self) -> set[str]:
-        if self.kev is None:
+    def _load_kev(self) -> dict[str, KevEntry]:
+        if self.kev_entries is None:
             try:
                 data = self._json(str(self.e.kev_url), max_bytes=self.cfg.collection.max_feed_bytes)
-                self.kev = {v["cveID"] for v in data.get("vulnerabilities", []) if isinstance(v, dict) and "cveID" in v}
-            except (FetchError, ValueError, KeyError) as e:
+                self.kev_entries = parse_kev(data)
+            except (FetchError, ValueError) as e:
                 log.warning("CISA KEV unavailable (%s); no Known Exploited badges this run", e)
-                self.kev, self.kev_ok = set(), False
-        return self.kev
+                self.kev_entries, self.kev_ok = {}, False
+        return self.kev_entries
+
+    def recent_kev(self, exclude: set[str], limit: int) -> list[str]:
+        """The newest Known Exploited CVEs not already in the edition."""
+        entries = [e for e in self._load_kev().values() if e.id not in exclude]
+        entries.sort(key=lambda e: (e.added or date.min, e.id), reverse=True)
+        return [e.id for e in entries[:limit]]
 
     def _load_epss(self, ids: list[str]) -> dict[str, float]:
         scores: dict[str, float] = {}
@@ -139,6 +178,7 @@ class Enricher:
             for cve_id in todo:
                 info = self._nvd(cve_id)
                 info.kev = cve_id in kev
+                info.kev_entry = kev.get(cve_id)
                 info.epss = epss.get(cve_id)
                 self.cache[cve_id] = info
         return {c: self.cache[c] for c in cve_ids if c in self.cache}

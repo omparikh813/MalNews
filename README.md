@@ -20,6 +20,10 @@ Sections: **Story of the Week** (kept all week unless a story scores 20% higher)
 **News of the Day** (top 3), **New Threats** (zero-days with a CVE), **Other Headlines**.
 Each CVE shows its score and band (e.g. "Critical 9.8"), Known Exploited, EPSS, and links to cve.org and NVD.
 At most two photos per edition, each credited ("Image: Publisher") with a link to the article.
+Every CVE a story mentions is printed with its score (or "Score pending" / "Score unavailable"), and Known Exploited
+CVEs add CISA's vendor, product and federal fix date. A bar under the masthead summarizes the day's CVEs by severity.
+The end of the paper is a **Known Exploited Roundup** of CISA's newest additions, sized to fill the last page:
+the renderer adds rows only while the page count stays the same, so there is no half-empty final page.
 
 ## How the API keys are protected
 

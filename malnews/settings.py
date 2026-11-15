@@ -69,6 +69,11 @@ class EnrichCfg(_Strict):
         return v
 
 
+class RoundupCfg(_Strict):
+    max_rows: int = Field(ge=0, le=100)
+    min_rows: int = Field(ge=1, le=20)
+
+
 class ZeroDayCfg(_Strict):
     keywords: list[str] = Field(min_length=1, max_length=20)
 
@@ -120,6 +125,7 @@ class Config(_Strict):
     ranking: RankingCfg
     priority: PriorityCfg
     enrich: EnrichCfg
+    roundup: RoundupCfg
     zero_day: ZeroDayCfg
     story_of_week: StoryOfWeekCfg
     ai: AICfg

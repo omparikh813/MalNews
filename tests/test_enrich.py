@@ -4,7 +4,9 @@ import json
 
 import pytest
 
-from malnews.enrich import CveInfo, Enricher, band, parse_nvd
+from datetime import date
+
+from malnews.enrich import CveInfo, Enricher, band, parse_kev, parse_nvd
 from malnews.safety import FetchResult, HTTPStatusError
 
 from .conftest import FakeFetcher
@@ -158,3 +160,54 @@ def test_fake_fetcher_contract():
     assert isinstance(FakeFetcher({"u": b"x"}).get("u", headers={"a": "b"}), FetchResult)
     with pytest.raises(HTTPStatusError):
         FakeFetcher({}).get("missing")
+
+
+def kev_json(*rows):
+    return json.dumps({"vulnerabilities": [
+        {"cveID": c, "vendorProject": v, "product": p, "vulnerabilityName": n, "dateAdded": d, "dueDate": due,
+         "knownRansomwareCampaignUse": r} for c, v, p, n, d, due, r in rows]}).encode()
+
+
+KEV_ROWS = [
+    ("CVE-2026-0001", "Acme", "VPN", "Acme VPN bypass", "2026-11-10", "2026-12-01", "Known"),
+    ("CVE-2026-0002", "Globex", "Mail", "Globex Mail RCE", "2026-11-12", "2026-12-03", "Unknown"),
+    ("CVE-2026-0003", "Initech", "Panel", "Initech panel flaw", "2026-11-02", "2026-11-23", "Unknown"),
+]
+
+
+def test_parse_kev_details():
+    entries = parse_kev(json.loads(kev_json(*KEV_ROWS)))
+    one = entries["CVE-2026-0001"]
+    assert (one.vendor, one.product, one.added, one.due, one.ransomware) == ("Acme", "VPN", date(2026, 11, 10), date(2026, 12, 1), True)
+    assert not entries["CVE-2026-0002"].ransomware
+
+
+def test_parse_kev_ignores_bad_rows_and_dates():
+    data = {"vulnerabilities": ["junk", {"cveID": "not-a-cve"}, {"cveID": "CVE-2026-0009", "dateAdded": "yesterday"}]}
+    entries = parse_kev(data)
+    assert list(entries) == ["CVE-2026-0009"] and entries["CVE-2026-0009"].added is None
+
+
+def test_kev_text_is_cleaned():
+    entries = parse_kev({"vulnerabilities": [{"cveID": "CVE-2026-0001", "vendorProject": "<b>Acme</b>\u202e", "product": "x" * 500}]})
+    assert entries["CVE-2026-0001"].vendor == "Acme" and len(entries["CVE-2026-0001"].product) == 60
+
+
+def test_recent_kev_is_newest_first_and_skips_covered(cfg):
+    f = FakeFetcher({KEV: kev_json(*KEV_ROWS)})
+    e = Enricher(f, cfg, None, interval=0)
+    assert e.recent_kev(set(), 10) == ["CVE-2026-0002", "CVE-2026-0001", "CVE-2026-0003"]
+    assert e.recent_kev({"CVE-2026-0002"}, 1) == ["CVE-2026-0001"]
+
+
+def test_recent_kev_is_empty_when_cisa_is_down(cfg):
+    f = FakeFetcher({KEV: 503})
+    e = Enricher(f, cfg, None, interval=0)
+    assert e.recent_kev(set(), 10) == [] and not e.kev_ok
+
+
+def test_lookup_attaches_kev_details(cfg):
+    f = FakeFetcher({KEV: kev_json(*KEV_ROWS), f"{EPSS}?cve=CVE-2026-0001": b'{"data": []}',
+                     f"{NVD}?cveId=CVE-2026-0001": json.dumps(nvd_body(cvssMetricV31=[metric(9.8)])).encode()})
+    info = Enricher(f, cfg, None, interval=0).lookup(["CVE-2026-0001"])["CVE-2026-0001"]
+    assert info.kev and info.kev_entry.vendor == "Acme" and info.kev_entry.due == date(2026, 12, 1)

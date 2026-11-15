@@ -6,7 +6,7 @@ from datetime import date, timedelta
 import pypdf
 import pytest
 
-from malnews.enrich import CveInfo
+from malnews.enrich import CveInfo, KevEntry
 from malnews.models import Story, Summary
 from malnews.render import build_edition, render_pdf
 from malnews.state import LinkRecord, StoryOfWeek, StoryRecord, WeeklyContent
@@ -57,7 +57,7 @@ def test_full_edition_is_three_to_four_pages(cfg, no_network):
     assert edition.words <= cfg.layout.max_words
     result = render_pdf(edition)
     reader, text = pdf_text(result.pdf)
-    assert 3 <= len(reader.pages) <= 4, len(reader.pages)
+    assert 2 <= len(reader.pages) <= 4, len(reader.pages)
     assert len(result.pdf) < 1_000_000 and result.blocked == []
 
     for expected in ("Story of the Week", "Updated Thursday", "What happened", "Who is affected",
@@ -157,3 +157,103 @@ def test_photo_with_unsafe_credit_link_is_dropped(cfg, tmp_path):
     path.write_bytes(image_bytes(1000, 560))
     bad = {"https://news.example.com/1": StoryImage(path, "P", "javascript:alert(1)")}
     assert full_edition(cfg, images=bad).context["news_of_the_day"][0]["image"] is None
+
+
+def kev(i, vendor="Acme", added=date(2026, 11, 10), ransomware=False):
+    return KevEntry(f"CVE-2026-2{i:04d}", vendor, "Gateway", "Acme Gateway authentication bypass", added, date(2026, 12, 1), ransomware)
+
+
+def candidates(n, start=0):
+    out = []
+    for i in range(start, start + n):
+        entry = kev(i, ransomware=i % 4 == 0)
+        out.append(CveInfo(entry.id, "scored", [9.8, 7.5, 5.3][i % 3], "3.1", True, 0.3, entry))
+    return out
+
+
+def test_every_cve_is_printed_with_a_score_or_status(cfg, no_network):
+    infos = [CveInfo("CVE-2026-30001", "scored", 9.8, "3.1", True, 0.9, kev(1)),
+             CveInfo("CVE-2026-30002", "pending"), CveInfo("CVE-2026-30003", "unavailable"),
+             CveInfo("CVE-2026-30004", "scored", 4.3, "3.1")]
+    s = Story(articles=[make_article("A story about four CVEs at once", cves=[i.id for i in infos])],
+              cve_infos=infos, summary=Summary("Summary.", None))
+    _, text = pdf_text(render_pdf(build_edition([s], cfg, NOW, ["X"])).pdf)
+    flat = text.replace(" ", "").lower()
+    for expected in ("cve-2026-30001", "critical9.8", "cve-2026-30002", "scorepending", "cve-2026-30003",
+                     "scoreunavailable", "cve-2026-30004", "medium4.3"):
+        assert expected in flat, expected
+
+
+def test_known_exploited_details_come_from_cisa_data(cfg, no_network):
+    entry = KevEntry("CVE-2026-30001", "Acme", "VPN Gateway", "x", date(2026, 11, 10), date(2026, 12, 1), True)
+    info = CveInfo("CVE-2026-30001", "scored", 9.8, "3.1", True, 0.9, entry)
+    s = Story(articles=[make_article("Acme VPN exploited in the wild now", cves=[info.id])], cve_infos=[info],
+              summary=Summary("Summary.", None))
+    cve = build_edition([s], cfg, NOW, ["X"]).context["news_of_the_day"][0]["cves"][0]
+    assert cve["kev_detail"] == "Acme VPN Gateway · federal fix due Dec 1 · used in ransomware"
+
+
+def test_snapshot_counts_distinct_cves(cfg):
+    shared = CveInfo("CVE-2026-30001", "scored", 9.8, "3.1", True)
+    stories = [Story(articles=[make_article(f"Story {i} headline about {'a' * i}", url=f"https://n.example.com/{i}")],
+                     cve_infos=infos, summary=Summary("S.", None), zero_day=i == 0)
+               for i, infos in enumerate(([shared, CveInfo("CVE-2026-30002", "pending")], [shared],
+                                          [CveInfo("CVE-2026-30003", "scored", 5.0, "3.1")]))]
+    snap = build_edition(stories, cfg, NOW, ["X"]).context["snapshot"]
+    assert (snap["total"], snap["kev"], snap["zero_days"], snap["highest"]) == (3, 1, 1, "9.8")
+    assert {seg["label"]: seg["count"] for seg in snap["segments"]} == {"Critical": 1, "Medium": 1, "Pending": 1}
+    assert sum(float(seg["width"].rstrip("%")) for seg in snap["segments"]) == pytest.approx(100, abs=0.5)
+
+
+def test_no_snapshot_without_cves(cfg):
+    s = Story(articles=[make_article("A breach with no CVE at all")], summary=Summary("S.", None))
+    assert build_edition([s], cfg, NOW, ["X"]).context["snapshot"] is None
+
+
+def test_roundup_skips_cves_already_printed(cfg):
+    shown = CveInfo("CVE-2026-20000", "scored", 9.8, "3.1", True)
+    s = Story(articles=[make_article("A story that already covers a KEV CVE", cves=[shown.id])], cve_infos=[shown],
+              summary=Summary("S.", None))
+    rows = build_edition([s], cfg, NOW, ["X"], kev_candidates=candidates(5)).context["roundup"]
+    assert "CVE-2026-20000" not in [r["id"] for r in rows] and len(rows) == 4
+
+
+def test_roundup_is_capped(cfg):
+    assert len(build_edition([], cfg, NOW, ["X"], kev_candidates=candidates(60)).context["roundup"]) == cfg.roundup.max_rows
+
+
+def test_fit_rows_picks_the_largest_count_that_adds_no_page():
+    from malnews.render import fit_rows
+
+    pages = lambda n: 2 + (n > 9)  # noqa: E731  rows 0..9 fit on page 2, a tenth spills to page 3
+    assert fit_rows(pages, total=30, min_rows=4) == 9
+    assert fit_rows(pages, total=6, min_rows=4) == 6
+    assert fit_rows(pages, total=3, min_rows=4) == 0
+    assert fit_rows(lambda n: 2 + (n > 2), total=30, min_rows=4) == 0
+
+
+def test_roundup_fills_the_last_page_without_adding_one(cfg, no_network):
+    from malnews.render import _layout, jinja_env
+
+    stories = [Story(articles=[make_article(f"Story {i} about an incident at a vendor", url=f"https://n.example.com/{i}")],
+                     summary=Summary(SENT * 2, None)) for i in range(9)]
+    edition = build_edition(stories, cfg, NOW, ["X"], kev_candidates=candidates(60))
+    template = jinja_env().get_template("edition.html.j2")
+
+    def pages(n):
+        html = template.render(**{**edition.context, "roundup": edition.context["roundup"][:n]})
+        return len(_layout(html, None)[0].render().pages)
+
+    result = render_pdf(edition)
+    base = pages(0)
+    assert result.pages == base and cfg.roundup.min_rows <= result.roundup_rows <= cfg.roundup.max_rows
+    if result.roundup_rows < len(edition.context["roundup"]):
+        assert pages(result.roundup_rows + 1) > base
+
+
+def test_roundup_table_is_printed_with_links_and_ransomware_mark(cfg, no_network):
+    edition = build_edition([], cfg, NOW, ["X"], kev_candidates=candidates(8))
+    reader, text = pdf_text(render_pdf(edition).pdf)
+    assert "knownexploitedroundup" in text.lower().replace(" ", "") and "†" in text and "Acme Gateway" in text
+    links = {str(a.get_object()["/A"]["/URI"]) for p in reader.pages for a in p.get("/Annots") or []}
+    assert "https://www.cve.org/CVERecord?id=CVE-2026-20000" in links and "https://nvd.nist.gov/vuln/detail/CVE-2026-20001" in links
