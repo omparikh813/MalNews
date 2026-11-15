@@ -74,6 +74,13 @@ ai:                              # FR-11 to FR-14
   max_output_tokens_extended: 4000  # Story of the Week (FR-16)
   reasoning_max_tokens: 1000     # cap on hidden thinking (OpenRouter 'reasoning'); 0 = don't send
 
+images:                          # Phase 3: at most 2 per edition
+  max_bytes: 10000000
+  min_width: 400                 # smaller images are skipped
+  max_width: 1000                # larger ones are scaled down
+  max_pixels: 25000000
+  jpeg_quality: 85
+
 layout:                          # FR-17
   max_words: 1150
   words_per_minute: 230

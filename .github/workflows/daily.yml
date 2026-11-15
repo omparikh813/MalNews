@@ -1,0 +1,134 @@
+# Builds the edition every day at 6:00 AM PST (7:00 AM during daylight saving) and publishes it to GitHub Pages.
+# build: holds the API keys, no write access.  deploy: Pages only.  data: saves the archive and state.json.
+name: daily
+
+on:
+  schedule:
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Publish to GitHub Pages (off: build only, then download the result from the run page)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: malnews
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      day: ${{ steps.day.outputs.day }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Look for the data branch
+        id: data
+        run: |
+          if git ls-remote --exit-code --heads origin data > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.data.outputs.exists == 'true'
+        with:
+          ref: data
+          path: data
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install system libraries for WeasyPrint
+        run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0
+
+      - name: Install hash-locked dependencies
+        run: pip install --require-hashes -r config/requirements.txt
+
+      - name: Restore the archive and state
+        run: |
+          mkdir -p site
+          if [ -d data/archive ]; then cp -r data/archive site/archive; fi
+          if [ -f data/state.json ]; then cp data/state.json state.json; fi
+
+      - name: Build today's edition
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+        run: python main.py
+
+      - name: Work out the edition date (PST, UTC-8)
+        id: day
+        run: echo "day=$(date -u -d '8 hours ago' +%F)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: edition
+          path: |
+            state.json
+            site/archive/${{ steps.day.outputs.day }}.pdf
+          retention-days: 7
+
+  deploy:
+    needs: build
+    if: github.event_name == 'schedule' || inputs.deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  data:
+    needs: [build, deploy]
+    if: needs.deploy.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: malnews-data
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: edition
+          path: ${{ runner.temp }}/edition
+
+      - name: Save the edition and state to the data branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DAY: ${{ needs.build.outputs.day }}
+          EDITION_DIR: ${{ runner.temp }}/edition
+          RUNNER_TEMP_DIR: ${{ runner.temp }}
+        run: |
+          mkdir -p "$RUNNER_TEMP_DIR/data-files/archive"
+          cp "$EDITION_DIR/state.json" "$RUNNER_TEMP_DIR/data-files/state.json"
+          cp "$EDITION_DIR/site/archive/$DAY.pdf" "$RUNNER_TEMP_DIR/data-files/archive/"
+          cp .github/scripts/save-to-data-branch.sh "$RUNNER_TEMP_DIR/"
+          bash "$RUNNER_TEMP_DIR/save-to-data-branch.sh" "Edition $DAY" "$RUNNER_TEMP_DIR/data-files"

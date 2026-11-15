@@ -1,5 +1,3 @@
-"""FR-15 Story of the Week, SR-7 state validation, FR-10 New Threats."""
-
 from __future__ import annotations
 
 import json
@@ -25,12 +23,11 @@ def rec(title, score, day, cves=(), id=None):
 
 
 def test_week_starts_monday():
-    assert week_start(date(2026, 11, 8)) == MON  # Sunday
+    assert week_start(date(2026, 11, 8)) == MON
     assert week_start(MON) == MON
 
 
 def test_seven_day_replay(cfg):
-    """Acceptance (Phase 2): a 7-day replay swaps the Story of the Week correctly."""
     state = State()
     log = []
 
@@ -61,7 +58,7 @@ def test_seven_day_replay(cfg):
         ("Sun", "kept", "Supply chain attack on build tool", None),
         ("Mon", "reset", "New week top story about firmware", None),
     ]
-    assert state.story_of_week.updated_on is None  # a reset clears "Updated <day>"
+    assert state.story_of_week.updated_on is None
 
 
 def test_older_story_in_history_can_win(cfg):
@@ -88,8 +85,6 @@ def test_remember_keeps_last_seven_days(cfg):
     assert sum(r.day == MON for r in state.history) == cfg.story_of_week.records_per_day
 
 
-# --- state.json (SR-7) ------------------------------------------------------------
-
 def test_missing_state_is_fresh(tmp_path):
     assert load_state(tmp_path / "state.json") == State()
 
@@ -99,7 +94,7 @@ def test_state_round_trip(tmp_path, cfg):
     update_story_of_week(state, [rec("A story title for testing", 0.5, MON)], MON, cfg)
     save_state(state, tmp_path / "state.json")
     assert load_state(tmp_path / "state.json") == state
-    assert not list(tmp_path.glob(".state-*"))  # no temp files left behind
+    assert not list(tmp_path.glob(".state-*"))
 
 
 def _valid_state_json(cfg) -> dict:
@@ -143,8 +138,6 @@ def test_symlinked_state_rejected(tmp_path):
         load_state(tmp_path / "state.json")
 
 
-# --- New Threats (FR-10) ------------------------------------------------------------
-
 def story(*articles) -> Story:
     return Story(articles=list(articles))
 
@@ -177,5 +170,5 @@ def test_rank_uses_official_priority(cfg):
              "CVE-2026-2": CveInfo("CVE-2026-2", "pending")}
     ranked = rank(dedupe([b, a], cfg), cfg, infos)
     assert ranked[0].title == "Low coverage but critical"
-    assert [i.id for i in ranked[0].cve_infos] == ["CVE-2026-1", "CVE-2026-2"]  # highest priority first
+    assert [i.id for i in ranked[0].cve_infos] == ["CVE-2026-1", "CVE-2026-2"]
     assert ranked[0].kev and ranked[0].priority == pytest.approx(infos["CVE-2026-1"].priority(cfg))

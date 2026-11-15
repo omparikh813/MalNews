@@ -1,5 +1,3 @@
-"""Stage 5: HTML/CSS to PDF with WeasyPrint (FR-17, FR-18, SR-2)."""
-
 from __future__ import annotations
 
 import math
@@ -12,6 +10,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from weasyprint import HTML
 
 from .enrich import CVE_ID_RE, CveInfo
+from .images import StoryImage
 from .models import Story
 from .rank import similar_titles
 from .safety import RenderURLFetcher, safe_href
@@ -24,7 +23,7 @@ FONTS = ROOT / "fonts"
 
 
 def jinja_env() -> Environment:
-    # SR-2: autoescape everything. Templates never use |safe on external data.
+    # Autoescape everything; templates never use |safe on external data.
     return Environment(
         loader=FileSystemLoader(TEMPLATES),
         autoescape=True,
@@ -43,7 +42,7 @@ def _cve_view(i: CveInfo) -> dict | None:
         return None
     return {
         "id": i.id,
-        # FR-8: link both records; the ID is regex-checked, so it is safe in a URL.
+        # Both records are linked; the ID is regex-checked, so it is safe in a URL.
         "cve_url": f"https://www.cve.org/CVERecord?id={i.id}",
         "nvd_url": f"https://nvd.nist.gov/vuln/detail/{i.id}",
         "score": f"{i.cvss:.1f}" if i.cvss is not None else None,
@@ -64,21 +63,30 @@ def _top_band(cves: list[dict]) -> dict | None:
 
 
 def _links(pairs) -> list[tuple[str, str]]:
-    # Links come only from feed metadata, re-checked here (SR-2).
+    # Links come only from feed metadata, re-checked here.
     return [(p, h) for p, u in pairs if (h := safe_href(u))]
 
 
-def _view(title, summary, mitigation, links, cves) -> dict:
+def _image_view(image: StoryImage | None, title: str) -> dict | None:
+    href = safe_href(image.link) if image else None
+    if not image or not href:
+        return None
+    return {"src": image.path.resolve().as_uri(), "credit": image.credit, "href": href, "alt": title}
+
+
+def _view(title, summary, mitigation, links, cves, image=None) -> dict:
     return {
         "title": title, "summary": summary or "", "mitigation": mitigation,
         "links": _links(links), "cves": cves, "top": _top_band(cves), "kev": any(c["kev"] for c in cves),
+        "image": _image_view(image, title),
         "words": _words(title, summary, mitigation) + 2 * len(links) + 4 * len(cves),
     }
 
 
-def story_view(s: Story) -> dict:
+def story_view(s: Story, image: StoryImage | None = None) -> dict:
     sm = s.summary
-    return _view(s.title, sm.summary if sm else "", sm.mitigation if sm else None, s.links, _cve_views(s.cve_infos))
+    return _view(s.title, sm.summary if sm else "", sm.mitigation if sm else None, s.links,
+                 _cve_views(s.cve_infos), image)
 
 
 def _record_cves(record: StoryRecord, infos: dict[str, CveInfo], cfg: Config) -> list[dict]:
@@ -87,24 +95,23 @@ def _record_cves(record: StoryRecord, infos: dict[str, CveInfo], cfg: Config) ->
 
 
 def usable(content: WeeklyContent | None) -> bool:
-    """AI-written Story of the Week content (older state files may hold an excerpt instead)."""
     return content is not None and not content.is_excerpt
 
 
 def record_summary(record: StoryRecord, content: WeeklyContent | None = None) -> str | None:
-    """The AI summary for a stored story, if there is one."""
     return record.summary or (content.what_happened if usable(content) else None)
 
 
-def record_view(record: StoryRecord, infos: dict[str, CveInfo], cfg: Config, summary: str) -> dict:
+def record_view(record: StoryRecord, infos: dict[str, CveInfo], cfg: Config, summary: str,
+                image: StoryImage | None = None) -> dict:
     return _view(record.title, summary, None, [(lk.publisher, lk.url) for lk in record.links],
-                 _record_cves(record, infos, cfg))
+                 _record_cves(record, infos, cfg), image)
 
 
-def weekly_view(sw: StoryOfWeek, infos: dict[str, CveInfo], cfg: Config) -> dict:
-    """Only called when sw.content is usable() AI content."""
+def weekly_view(sw: StoryOfWeek, infos: dict[str, CveInfo], cfg: Config,
+                image: StoryImage | None = None) -> dict:
     content = sw.content
-    v = record_view(sw.story, infos, cfg, content.what_happened)
+    v = record_view(sw.story, infos, cfg, content.what_happened, image)
     v.update({
         "parts": [(label, text) for label, text in (
             ("What happened", content.what_happened), ("Who is affected", content.who_affected),
@@ -120,7 +127,6 @@ def same_event(s: Story, record: StoryRecord, cfg: Config) -> bool:
 
 
 def sections(stories: list[Story], sotw: StoryRecord | None, cfg: Config) -> tuple[list, list, list]:
-    """FR-17 order: (News of the Day, New Threats, Other Headlines). Each story appears once."""
     remaining = [s for s in stories if not (sotw and same_event(s, sotw, cfg))]
     n = cfg.ranking.news_of_the_day
     top, rest = remaining[:n], remaining[n:]
@@ -139,23 +145,22 @@ class Edition:
 
 def build_edition(stories: list[Story], cfg: Config, now: datetime, source_names: list[str],
                   sotw: StoryOfWeek | None = None, replaced: StoryRecord | None = None,
-                  infos: dict[str, CveInfo] | None = None, replaced_summary: str | None = None) -> Edition:
-    """Story of the Week, News of the Day, New Threats, Other Headlines; trimmed to the word budget.
-
-    Every story shown has an AI summary: stories without one are left out.
-    """
-    infos = infos or {}
+                  infos: dict[str, CveInfo] | None = None, replaced_summary: str | None = None,
+                  images: dict[str, StoryImage] | None = None) -> Edition:
+    """Every story shown has an AI summary; stories without one are left out."""
+    infos, images = infos or {}, images or {}
     stories = [s for s in stories if s.summary]
     top, threats, others = sections(stories, sotw.story if sotw else None, cfg)
-    weekly = weekly_view(sotw, infos, cfg) if sotw and usable(sotw.content) else None
-    top_v, threat_v = [story_view(s) for s in top], [story_view(s) for s in threats]
-    # FR-15: the replaced pick moves to Other Headlines on the day it is replaced.
+    weekly = weekly_view(sotw, infos, cfg, images.get(sotw.story.id)) if sotw and usable(sotw.content) else None
+    top_v = [story_view(s, images.get(s.id) if i == 0 else None) for i, s in enumerate(top)]
+    threat_v = [story_view(s) for s in threats]
+    # The replaced pick moves to Other Headlines on the day it is replaced.
     replaced_v = [record_view(replaced, infos, cfg, replaced_summary)] if replaced and replaced_summary else []
     other_v = replaced_v + [story_view(s) for s in others]
 
     words = FIXED_WORDS + sum(v["words"] for v in (*top_v, *threat_v, *other_v)) + (weekly["words"] if weekly else 0)
     dropped = 0
-    while other_v and words > cfg.layout.max_words:  # drop lowest-ranked headlines first
+    while other_v and words > cfg.layout.max_words:
         words -= other_v.pop()["words"]
         dropped += 1
 
@@ -181,9 +186,9 @@ class RenderResult:
     blocked: list[str]
 
 
-def render_html_to_pdf(html: str) -> RenderResult:
-    """Render with a fetcher that can only read templates/ and fonts/ (SR-2)."""
-    fetcher = RenderURLFetcher([TEMPLATES, FONTS])
+def render_html_to_pdf(html: str, image_dir: Path | None = None) -> RenderResult:
+    """The renderer can read only templates/, fonts/ and the image folder."""
+    fetcher = RenderURLFetcher([TEMPLATES, FONTS, *([image_dir] if image_dir else [])])
     doc = HTML(string=html, base_url=str(TEMPLATES) + "/", url_fetcher=fetcher).render()
     meta = doc.metadata
     meta.attachments = []  # never embed files, whatever the HTML asks for
@@ -193,6 +198,6 @@ def render_html_to_pdf(html: str) -> RenderResult:
     return RenderResult(doc.write_pdf(), fetcher.blocked)
 
 
-def render_pdf(edition: Edition) -> RenderResult:
+def render_pdf(edition: Edition, image_dir: Path | None = None) -> RenderResult:
     html = jinja_env().get_template("edition.html.j2").render(**edition.context)
-    return render_html_to_pdf(html)
+    return render_html_to_pdf(html, image_dir)

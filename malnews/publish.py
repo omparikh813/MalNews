@@ -1,5 +1,3 @@
-"""Stage 6: write the site folder (FR-21). Deployment to Pages arrives in Phase 3."""
-
 from __future__ import annotations
 
 import re
@@ -12,7 +10,6 @@ _ARCHIVE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.pdf$")
 
 
 def write_site(pdf: bytes, out_dir: Path, day: str) -> None:
-    """Write latest.pdf, archive/<day>.pdf (re-running a day overwrites it) and index.html."""
     archive = out_dir / "archive"
     archive.mkdir(parents=True, exist_ok=True)
     (archive / f"{day}.pdf").write_bytes(pdf)

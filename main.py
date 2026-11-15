@@ -1,7 +1,7 @@
-"""MalNews: collect -> rank -> summarize -> render -> publish.
+"""MalNews: collect, rank, summarize, render, publish.
 
-  python main.py                     full run -> site/, state.json
-  python main.py --max-requests 10   cap AI requests for a test run (T3)
+  python main.py                     full run -> site/ and state.json
+  python main.py --max-requests 10   cap AI requests for a test run
 
 Keys come from the environment (GitHub secrets in CI, a git-ignored .env locally).
 """
@@ -12,6 +12,7 @@ import argparse
 import logging
 import os
 import sys
+import tempfile
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,10 +20,12 @@ from pathlib import Path
 from malnews.collect import collect
 from malnews.enrich import Enricher
 from malnews.errors import ConfigError, MalNewsError
+from malnews.images import story_images
 from malnews.publish import write_site
 from malnews.rank import cves_by_importance, dedupe, rank
 from malnews.render import (
-    FIXED_WORDS, build_edition, record_summary, record_view, render_pdf, same_event, story_view, usable, weekly_view,
+    FIXED_WORDS, build_edition, record_summary, record_view, render_pdf, same_event, sections, story_view, usable,
+    weekly_view,
 )
 from malnews.safety import SafeFetcher
 from malnews.settings import load_config, load_sources
@@ -37,7 +40,7 @@ log = logging.getLogger("malnews")
 
 
 class RedactSecrets(logging.Filter):
-    """SR-5: never let a key value reach a log line, even inside an exception message."""
+    """Replaces key values in log lines, even inside exception messages."""
 
     def __init__(self):
         super().__init__()
@@ -62,7 +65,7 @@ def setup_logging() -> None:
 
 
 def write_job_summary(lines: list[str]) -> None:
-    """FR-22. Public on a public repo: counts only, never secrets or article text."""
+    """Counts only: the job summary is public on a public repo."""
     text = "\n".join(lines) + "\n"
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
@@ -80,7 +83,6 @@ def run(max_requests: int | None, out_dir: Path, state_path: Path) -> int:
         load_dotenv(ROOT / ".env", override=True)  # .env beats a stale exported key
         setup_logging()  # pick up keys loaded from .env for redaction
 
-    # Fail before any network use (FR-11, SR-7).
     model = resolve_model(os.environ.get("OPENROUTER_MODEL"), cfg.ai)
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not key:
@@ -94,7 +96,6 @@ def run(max_requests: int | None, out_dir: Path, state_path: Path) -> int:
     now = datetime.now(timezone.utc)
     today = now.astimezone(timezone(timedelta(hours=cfg.edition.utc_offset_hours))).date()
 
-    # Collect, merge, and score with official data (FR-1 to FR-10).
     articles, report = collect(sources, fetcher, now, cfg)
     stories = dedupe(articles, cfg)
     enricher = Enricher(fetcher, cfg, nvd_key)
@@ -103,7 +104,6 @@ def run(max_requests: int | None, out_dir: Path, state_path: Path) -> int:
     infos = enricher.lookup(cves_by_importance(stories) + weekly_cves + pending)
     stories = rank(stories, cfg, infos)
 
-    # Story of the Week (FR-15, FR-16).
     per_day = cfg.story_of_week.records_per_day
     outcome = update_story_of_week(state, [to_record(s, today, cfg) for s in stories[:per_day]], today, cfg)
     sotw = state.story_of_week
@@ -128,14 +128,24 @@ def run(max_requests: int | None, out_dir: Path, state_path: Path) -> int:
             shown += 1
             words += story_view(s)["words"]
 
-    edition = build_edition(stories, cfg, now, [s.name for s in sources], sotw, outcome.replaced, infos,
-                            replaced_summary)
-    result = render_pdf(edition)
+    # At most two images: the Story of the Week and the top News of the Day.
+    wanted = {}
+    if sotw and usable(sotw.content):
+        sr = sotw.story
+        wanted[sr.id] = (sr.image_url, sr.image_credit or "", sr.image_link or sr.id)
+    top, _, _ = sections([s for s in stories if s.summary], sotw.story if sotw else None, cfg)
+    if top and (pic := top[0].image_source):
+        wanted[top[0].id] = (pic.image_url, pic.source, pic.url)
+
+    with tempfile.TemporaryDirectory(prefix="malnews-img-") as tmp:
+        images = story_images(fetcher, wanted, Path(tmp), cfg)
+        edition = build_edition(stories, cfg, now, [s.name for s in sources], sotw, outcome.replaced, infos,
+                                replaced_summary, images)
+        result = render_pdf(edition, Path(tmp))
     if result.blocked:
         log.warning("renderer blocked %d resource request(s)", len(result.blocked))
     write_site(result.pdf, out_dir, today.isoformat())  # only reached when every step succeeded
 
-    # Remember today for the rest of the week, and track CVEs NVD has not scored yet (FR-9).
     remember(state, [to_record(s, today, cfg) for s in stories[:per_day]], today, cfg)
     for cve, info in infos.items():
         if info.status == "pending":
@@ -165,6 +175,7 @@ def run(max_requests: int | None, out_dir: Path, state_path: Path) -> int:
         f"{st.failed} left out (no usable summary), {st.flagged} left out (moderation), "
         f"{st.skipped} left out (request cap)"
         + (f" ({rate:.0%} usable)" if rate is not None else ""),
+        f"- Images: {len(images)} of {len(wanted)}",
         f"- Words: {edition.words}; PDF: {len(result.pdf) / 1024:.0f} KB",
     ])
     return 0

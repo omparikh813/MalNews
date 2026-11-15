@@ -1,5 +1,3 @@
-"""End to end with the network and model replaced, plus key protection (SR-5)."""
-
 from __future__ import annotations
 
 import io
@@ -16,16 +14,21 @@ import main
 from malnews.enrich import Enricher
 from malnews.errors import RateLimitStop
 
-from .conftest import ROOT, FakeFetcher, rss
+from .conftest import ROOT, FakeFetcher, image_bytes, rss
 
 KEY = "sk-or-v1-test-key-0123456789"
 
 
 @pytest.fixture
 def env(monkeypatch):
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")  # skip .env loading
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("OPENROUTER_API_KEY", KEY)
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+
+
+def page(og: str) -> bytes:
+    return (f'<html><head><meta property="og:image" content="{og}"></head><body><article><p>'
+            + "Full article text. " * 40 + "</p></article></body></html>").encode()
 
 
 NVD = "https://services.nvd.nist.gov/rest/json/cves/2.0"
@@ -35,7 +38,6 @@ EPSS = "https://api.first.org/data/v1/epss"
 
 @pytest.fixture
 def fake_world(monkeypatch):
-    """Feeds and data APIs from FakeFetcher; a model that answers with fixed JSON."""
     now = datetime.now(timezone.utc)
     pages = {
         "https://www.cisa.gov/cybersecurity-advisories/all.xml": rss(
@@ -43,6 +45,10 @@ def fake_world(monkeypatch):
              "Advisory about CVE-2026-1111 and CVE-2026-2222.")),
         "https://krebsonsecurity.com/feed/": rss(
             ("Data broker breach exposes records", "https://krebsonsecurity.com/b", now - timedelta(hours=2), "Breach.")),
+        "https://www.cisa.gov/a": page("https://img.example.com/cisa.png"),
+        "https://krebsonsecurity.com/b": page("https://img.example.com/krebs.jpg"),
+        "https://img.example.com/cisa.png": image_bytes(1400, 800, "PNG"),
+        "https://img.example.com/krebs.jpg": image_bytes(900, 500),
         KEV: json.dumps({"vulnerabilities": [{"cveID": "CVE-2026-1111"}]}).encode(),
         f"{EPSS}?cve=CVE-2026-1111,CVE-2026-2222": json.dumps({"data": [{"cve": "CVE-2026-1111", "epss": "0.9"}]}).encode(),
         f"{NVD}?cveId=CVE-2026-1111": json.dumps({"vulnerabilities": [{"cve": {"metrics": {"cvssMetricV31": [
@@ -63,7 +69,7 @@ def fake_world(monkeypatch):
     fetcher = FakeFetcher(pages)
     monkeypatch.setattr(main, "SafeFetcher", lambda **kw: fetcher)
     monkeypatch.setattr(main, "OpenRouterClient", Model)
-    monkeypatch.setattr(main, "Enricher", lambda f, c, k: Enricher(f, c, k, interval=0))  # no NVD pacing
+    monkeypatch.setattr(main, "Enricher", lambda f, c, k: Enricher(f, c, k, interval=0))
     Model.fetcher = fetcher
     return Model
 
@@ -87,8 +93,8 @@ def test_pending_cves_are_tracked_between_runs(tmp_path, env, fake_world, no_net
     assert main.main([], out_dir=tmp_path / "site", state_path=state_path) == 0
     state = json.loads(state_path.read_text())
     assert list(state["pending"]) == ["CVE-2026-2222"] and state["story_of_week"]
-    assert main.main([], out_dir=tmp_path / "site", state_path=state_path) == 0  # second run keeps working
-    assert json.loads(state_path.read_text())["pending"] == state["pending"]  # first-seen date kept
+    assert main.main([], out_dir=tmp_path / "site", state_path=state_path) == 0
+    assert json.loads(state_path.read_text())["pending"] == state["pending"]
 
 
 def test_nvd_key_only_sent_to_nvd(tmp_path, env, fake_world, monkeypatch, no_network):
@@ -172,3 +178,29 @@ def test_excerpt_in_old_state_is_replaced_by_ai(tmp_path, env, fake_world, no_ne
     text = pdf_text_of(tmp_path / "latest.pdf")
     assert "OLD EXCERPT TEXT" not in text and "Weekly happened." in text
     assert json.loads(state_path.read_text())["story_of_week"]["content"]["is_excerpt"] is False
+
+
+def test_two_images_with_credits(tmp_path, env, fake_world, no_network):
+    assert main.main([], out_dir=tmp_path, state_path=tmp_path / "state.json") == 0
+    reader = pypdf.PdfReader(io.BytesIO((tmp_path / "latest.pdf").read_bytes()))
+    assert len({im.name for p in reader.pages for im in p.images}) == 2
+    text = " ".join(p.extract_text() for p in reader.pages)
+    assert "Image: CISA" in text and "Image: Krebs on Security" in text
+    links = {str(a.get_object()["/A"]["/URI"]) for p in reader.pages for a in p.get("/Annots") or []}
+    assert "https://www.cisa.gov/a" in links and "https://krebsonsecurity.com/b" in links
+
+
+def test_broken_images_are_skipped_not_fatal(tmp_path, env, fake_world, no_network):
+    fake_world.fetcher.pages["https://img.example.com/cisa.png"] = b"not an image"
+    fake_world.fetcher.pages["https://img.example.com/krebs.jpg"] = 404
+    assert main.main([], out_dir=tmp_path, state_path=tmp_path / "state.json") == 0
+    reader = pypdf.PdfReader(io.BytesIO((tmp_path / "latest.pdf").read_bytes()))
+    assert len({im.name for p in reader.pages for im in p.images}) == 0
+    assert "Image:" not in " ".join(p.extract_text() for p in reader.pages)
+
+
+def test_image_survives_in_state_for_the_week(tmp_path, env, fake_world, no_network):
+    state_path = tmp_path / "state.json"
+    assert main.main([], out_dir=tmp_path, state_path=state_path) == 0
+    story = json.loads(state_path.read_text())["story_of_week"]["story"]
+    assert story["image_url"] == "https://img.example.com/cisa.png" and story["image_credit"] == "CISA"

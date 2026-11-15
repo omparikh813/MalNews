@@ -1,0 +1,35 @@
+# GitHub switches off scheduled workflows in a public repo after 60 days without activity.
+# This commits once a month to the data branch, which counts as activity, so the daily run keeps going.
+name: keepalive
+
+on:
+  schedule:
+    - cron: "17 3 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: malnews-data
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Commit to the data branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUNNER_TEMP_DIR: ${{ runner.temp }}
+        run: |
+          mkdir -p "$RUNNER_TEMP_DIR/keepalive"
+          date -u +"Last keep-alive: %Y-%m-%d" > "$RUNNER_TEMP_DIR/keepalive/keepalive.txt"
+          cp .github/scripts/save-to-data-branch.sh "$RUNNER_TEMP_DIR/"
+          bash "$RUNNER_TEMP_DIR/save-to-data-branch.sh" "Keep-alive $(date -u +%F)" "$RUNNER_TEMP_DIR/keepalive"

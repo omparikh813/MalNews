@@ -1,5 +1,3 @@
-"""Strict, schema-validated loading of config/config.yaml and config/sources.yaml (SR-7)."""
-
 from __future__ import annotations
 
 from datetime import date
@@ -102,6 +100,14 @@ class AICfg(_Strict):
         return v
 
 
+class ImagesCfg(_Strict):
+    max_bytes: int = Field(gt=0, le=20_000_000)
+    min_width: int = Field(ge=100, le=4000)
+    max_width: int = Field(ge=200, le=4000)
+    max_pixels: int = Field(gt=0, le=100_000_000)
+    jpeg_quality: int = Field(ge=40, le=100)
+
+
 class LayoutCfg(_Strict):
     max_words: int = Field(gt=100, le=5000)
     words_per_minute: int = Field(gt=50, le=1000)
@@ -117,6 +123,7 @@ class Config(_Strict):
     zero_day: ZeroDayCfg
     story_of_week: StoryOfWeekCfg
     ai: AICfg
+    images: ImagesCfg
     layout: LayoutCfg
 
 

@@ -9,3 +9,4 @@ weasyprint>=66
 pydantic>=2.9
 pyyaml>=6.0.2
 python-dotenv>=1.0
+pillow>=11

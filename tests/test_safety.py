@@ -1,5 +1,3 @@
-"""SR-2 links and SR-6 outbound fetching."""
-
 from __future__ import annotations
 
 import socket
@@ -12,18 +10,14 @@ from malnews.safety import (
 )
 
 
-# --- CVE regex (FR-7) -------------------------------------------------------
-
 def test_cve_regex_extracts_and_normalizes():
     assert extract_cves("cve-2026-1234 and CVE-2026-123456, not CVE-26-1") == {"CVE-2026-1234", "CVE-2026-123456"}
 
 
-# --- links (SR-2) -----------------------------------------------------------
-
 @pytest.mark.parametrize("url", [
     "javascript:alert(1)", "data:text/html,hi", "file:///etc/passwd", "ftp://x.com/a",
     "https://user:pw@example.com/", "https://example.com:8443/", "https://exa mple.com/",
-    "https://localhost/", "https://example.com/‮", "", None,
+    "https://localhost/", "https://example.com/\u202e", "", None,
 ])
 def test_safe_href_rejects(url):
     assert safe_href(url) is None
@@ -38,10 +32,8 @@ def test_canonical_url_drops_tracking():
 
 
 def test_clean_text_strips_tags_and_bidi():
-    assert clean_text("<p>Hi &amp; <b>bye</b>‮</p>") == "Hi & bye"
+    assert clean_text("<p>Hi &amp; <b>bye</b>\u202e</p>") == "Hi & bye"
 
-
-# --- outbound fetching (SR-6) -----------------------------------------------
 
 @pytest.mark.parametrize("ip", ["127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254",
                                 "100.64.0.1", "::1", "fe80::1", "::ffff:127.0.0.1", "0.0.0.0"])
@@ -113,7 +105,7 @@ def test_redirect_to_metadata_service_blocked(public_dns):
     f = fetcher_with([FakeResp(302, {"location": "http://169.254.169.254/latest/meta-data/"})])
     with pytest.raises(BlockedURL):
         f.get("https://news.example.com/a")
-    assert f.session.urls == ["https://news.example.com/a"]  # the internal URL was never requested
+    assert f.session.urls == ["https://news.example.com/a"]
 
 
 def test_api_key_not_forwarded_to_another_host(public_dns):

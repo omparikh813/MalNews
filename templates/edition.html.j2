@@ -8,18 +8,16 @@
 <body>
 
 <header class="masthead">
-  <div class="rule"></div>
+  <div class="dateline">
+    <span>Edition {{ edition }}</span>
+    <span>{{ date_long }}</span>
+    <span>{{ read_minutes }} min read</span>
+  </div>
   <h1>MalNews</h1>
   <div class="tagline">The five-minute security briefing</div>
-  <div class="meta">
-    <span>{{ date_long }}</span>
-    <span>Edition {{ edition }}</span>
-    <span>{{ read_minutes }} min read</span>
-    <span>Generated {{ generated }}</span>
-  </div>
+  <div class="generated">Generated {{ generated }}</div>
 </header>
 
-{# FR-8: severity always shows the score and the band name, never color alone. #}
 {% macro severity(c) %}
 {% if c.score %}<span class="badge sev-{{ c.band | lower }}">{{ c.band }} {{ c.score }}</span>
 {% elif c.status == "pending" %}<span class="badge sev-none">Score pending</span>
@@ -45,22 +43,25 @@
 <p class="links">{% for publisher, href in s.links %}<a href="{{ href }}">{{ publisher }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
 {% endmacro %}
 
+{% macro photo(img) %}
+{% if img %}
+<figure class="photo">
+  <img src="{{ img.src }}" alt="{{ img.alt }}">
+  <figcaption>Image: <a href="{{ img.href }}">{{ img.credit }}</a></figcaption>
+</figure>
+{% endif %}
+{% endmacro %}
+
 {% macro story(s, cls="") %}
 <article class="story {{ cls }}">
   <div class="badges">{{ badges(s) }}</div>
   <h3>{{ s.title }}</h3>
+  {% if cls == "lead" %}{{ photo(s.image) }}{% endif %}
   <p>{{ s.summary }}</p>
   {% if s.mitigation %}<p class="fix"><b>Fix:</b> {{ s.mitigation }}</p>{% endif %}
   {{ cve_lines(s) }}
   {{ links(s) }}
 </article>
-{% endmacro %}
-
-{# Two stories per row. Rows, not CSS columns, so page breaks fall cleanly between rows. #}
-{% macro grid(items, cls="") %}
-{% for row in items | batch(2) %}
-<div class="row">{% for s in row %}{{ story(s, cls) }}{% endfor %}{% if row | length == 1 %}<div class="story"></div>{% endif %}</div>
-{% endfor %}
 {% endmacro %}
 
 {% if story_of_week %}
@@ -69,6 +70,7 @@
   <div class="kicker">Story of the Week{% if w.updated %} <span class="updated">{{ w.updated }}</span>{% endif %}</div>
   <div class="badges">{{ badges(w) }}</div>
   <h2>{{ w.title }}</h2>
+  {{ photo(w.image) }}
   {% for label, text in w.parts %}
   <p><b>{{ label }}.</b> {{ text }}</p>
   {% endfor %}
@@ -77,25 +79,22 @@
 </section>
 {% endif %}
 
-<section>
+<main class="paper">
+  {% if news_of_the_day %}
   <h2 class="section">News of the Day</h2>
-  {% if news_of_the_day %}{{ story(news_of_the_day[0], "lead") }}{% endif %}
-  {{ grid(news_of_the_day[1:], "second") }}
-</section>
+  {% for s in news_of_the_day %}{{ story(s, "lead" if loop.first else "") }}{% endfor %}
+  {% endif %}
 
-{% if new_threats %}
-<section>
+  {% if new_threats %}
   <h2 class="section">New Threats</h2>
-  {{ grid(new_threats, "threat") }}
-</section>
-{% endif %}
+  {% for s in new_threats %}{{ story(s, "threat") }}{% endfor %}
+  {% endif %}
 
-{% if headlines %}
-<section>
+  {% if headlines %}
   <h2 class="section">Other Headlines</h2>
-  {{ grid(headlines) }}
-</section>
-{% endif %}
+  {% for s in headlines %}{{ story(s) }}{% endfor %}
+  {% endif %}
+</main>
 
 <footer>
   <p><b>Sources:</b> {{ sources | join(", ") }}.</p>

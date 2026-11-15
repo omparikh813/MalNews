@@ -1,10 +1,5 @@
-"""Story of the Week (FR-15).
-
-A week runs Monday 00:00 to Sunday 23:59 PST. On the first run of a week the
-pick resets to that day's top story. After that, a story from the last 7 days
-replaces it only if it scores at least replace_ratio (20%) higher; follow-up
-coverage of the same event never counts as a replacement.
-"""
+"""Weeks run Monday to Sunday (PST). The pick resets each Monday; after that a story replaces it only when
+it scores replace_ratio higher, and follow-up coverage of the same event never counts."""
 
 from __future__ import annotations
 
@@ -22,6 +17,7 @@ def week_start(day: date) -> date:
 
 
 def to_record(story: Story, day: date, cfg: Config) -> StoryRecord:
+    pic = story.image_source
     return StoryRecord(
         id=story.id,
         day=day,
@@ -31,6 +27,9 @@ def to_record(story: Story, day: date, cfg: Config) -> StoryRecord:
         cves=sorted(story.cves)[:50],
         text=story.primary.text[: cfg.story_of_week.max_text_chars],
         summary=story.summary.summary[:2000] if story.summary else None,
+        image_url=pic.image_url if pic else None,
+        image_credit=pic.source[:60] if pic else None,
+        image_link=pic.url if pic else None,
     )
 
 
@@ -40,13 +39,13 @@ def same_event(a: StoryRecord, b: StoryRecord, cfg: Config) -> bool:
 
 @dataclass
 class WeeklyOutcome:
-    status: str  # "reset", "kept", "replaced" or "none"
-    replaced: StoryRecord | None = None  # the previous pick, shown in Other Headlines today
-    replaced_content: WeeklyContent | None = None  # its AI write-up, used as its summary there
+    status: str
+    replaced: StoryRecord | None = None
+    replaced_content: WeeklyContent | None = None
 
 
 def update_story_of_week(state: State, today: list[StoryRecord], day: date, cfg: Config) -> WeeklyOutcome:
-    """Update state in place. today must be sorted best first."""
+    """today must be sorted best first."""
     sw = cfg.story_of_week
     start = week_start(day)
     recent = [r for r in state.history if r.day > day - timedelta(days=sw.history_days) and r.day < day]
@@ -78,7 +77,6 @@ def update_story_of_week(state: State, today: list[StoryRecord], day: date, cfg:
 
 
 def remember(state: State, today: list[StoryRecord], day: date, cfg: Config) -> None:
-    """Keep the top records of the last history_days days (FR-15)."""
     sw = cfg.story_of_week
     keep = [r for r in state.history if day - timedelta(days=sw.history_days) < r.day < day]
     state.history = keep + today[: sw.records_per_day]

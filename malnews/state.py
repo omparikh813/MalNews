@@ -1,9 +1,4 @@
-"""state.json: Story of the Week and pending CVEs between runs (FR-9, FR-15, SR-7).
-
-The file is validated against a strict schema on load. Anything unexpected
-(unknown fields, wrong types, unsafe links, oversized content) stops the run
-before it publishes, instead of being trusted.
-"""
+"""Strictly validated: anything unexpected stops the run instead of being trusted."""
 
 from __future__ import annotations
 
@@ -23,8 +18,6 @@ MAX_STATE_BYTES = 2_000_000
 
 
 class StateError(MalNewsError):
-    """state.json is missing pieces, malformed, or tampered with. Publish nothing."""
-
     exit_code = 7
 
 
@@ -60,6 +53,16 @@ class StoryRecord(_Strict):
     cves: list[str] = Field(default_factory=list, max_length=50)
     text: str = Field(default="", max_length=10_000)
     summary: str | None = Field(default=None, max_length=2000)
+    image_url: str | None = Field(default=None, max_length=2048)
+    image_credit: str | None = Field(default=None, max_length=60)
+    image_link: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("image_url", "image_link")
+    @classmethod
+    def _plain_https(cls, v: str | None) -> str | None:
+        if v is not None and safe_href(v) != v:
+            raise ValueError("link is not a plain https URL")
+        return v
 
     @field_validator("cves")
     @classmethod
@@ -79,7 +82,7 @@ class StoryOfWeek(_Strict):
     story: StoryRecord
     content: WeeklyContent | None = None
     set_on: date
-    updated_on: date | None = None  # set when it replaced an earlier pick this week
+    updated_on: date | None = None
 
 
 class State(_Strict):
@@ -111,7 +114,7 @@ def load_state(path: Path) -> State:
 
 
 def save_state(state: State, path: Path) -> None:
-    """Write atomically, so a crash mid-write never leaves a half-written file."""
+    """Atomic write, so a crash never leaves a half-written file."""
     data = state.model_dump_json(indent=1).encode()
     fd, tmp = tempfile.mkstemp(prefix=".state-", dir=path.parent)
     try:

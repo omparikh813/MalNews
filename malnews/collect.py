@@ -1,5 +1,3 @@
-"""Stage 1: feeds, article text, CVE IDs (FR-1 to FR-3, FR-7)."""
-
 from __future__ import annotations
 
 import calendar
@@ -7,7 +5,7 @@ import logging
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import feedparser
 import trafilatura
@@ -32,7 +30,6 @@ class CollectReport:
 
 
 def _entry_time(entry) -> datetime | None:
-    """The later of published and updated (FR-2)."""
     with warnings.catch_warnings():  # feedparser warns when it maps updated -> published
         warnings.simplefilter("ignore", DeprecationWarning)
         stamps = [entry.get("published_parsed"), entry.get("updated_parsed")]
@@ -40,10 +37,11 @@ def _entry_time(entry) -> datetime | None:
     return max(times) if times else None
 
 
-def _article_text(url: str, fetcher, robots: RobotsCache, max_chars: int, refused: set[str]) -> str | None:
+def _article_page(url: str, fetcher, robots: RobotsCache, max_chars: int,
+                  refused: set[str]) -> tuple[str | None, str | None]:
     host = urlsplit(url).hostname or ""
     if host in refused or not robots.allowed(url):
-        return None
+        return None, None
     try:
         page = fetcher.get(url)
     except HTTPStatusError as e:
@@ -52,16 +50,17 @@ def _article_text(url: str, fetcher, robots: RobotsCache, max_chars: int, refuse
             log.warning("%s returned HTTP %d; summarizing its articles from the feed text", host, e.status)
         else:
             log.info("article fetch failed, summarizing from the feed text: %s", e)
-        return None
+        return None, None
     except FetchError as e:
         log.info("article fetch failed, summarizing from the feed text: %s", e)
-        return None
+        return None, None
+    html = page.content.decode("utf-8", "replace")
     text = trafilatura.extract(
-        page.content.decode("utf-8", "replace"),
-        include_comments=False, include_tables=False, include_links=False, include_images=False,
+        html, include_comments=False, include_tables=False, include_links=False, include_images=False,
     )
-    text = clean_text(text, max_chars)
-    return text or None
+    meta = trafilatura.extract_metadata(html, default_url=url)
+    image = safe_href(urljoin(url, meta.image)) if meta and meta.image else None
+    return clean_text(text, max_chars) or None, image
 
 
 def collect_source(source: Source, fetcher, robots: RobotsCache, now: datetime, cfg: Config,
@@ -83,7 +82,7 @@ def collect_source(source: Source, fetcher, robots: RobotsCache, now: datetime, 
             log.info("skipping item with unsafe link or no title from %s", source.name)
             continue
         excerpt = clean_text(entry.get("summary"), MAX_EXCERPT_CHARS)
-        text = _article_text(url, fetcher, robots, cfg.collection.max_article_chars, refused)
+        text, image = _article_page(url, fetcher, robots, cfg.collection.max_article_chars, refused)
         articles.append(Article(
             source=source.name,
             tier=source.tier,
@@ -94,6 +93,7 @@ def collect_source(source: Source, fetcher, robots: RobotsCache, now: datetime, 
             text=text or excerpt,
             text_is_excerpt=text is None,
             cves=extract_cves(" ".join((title, excerpt, text or ""))),
+            image_url=image,
         ))
     return articles
 
@@ -106,7 +106,7 @@ def collect(sources: list[Source], fetcher, now: datetime, cfg: Config) -> tuple
     for source in sources:
         try:
             items = collect_source(source, fetcher, robots, now, cfg, refused)
-        except (FetchError, ValueError) as e:  # FR-3: log and skip
+        except (FetchError, ValueError) as e:
             log.warning("source %s failed: %s", source.name, e)
             report.failed.append(source.name)
             continue

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import socket
 import sys
 from datetime import datetime, timezone
@@ -7,6 +8,7 @@ from email.utils import format_datetime
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -30,8 +32,6 @@ def sources():
 
 @pytest.fixture
 def no_network(monkeypatch):
-    """Fail the test if anything opens a network connection."""
-
     def guard(*args, **kwargs):
         raise AssertionError("network access attempted")
 
@@ -45,8 +45,14 @@ def make_article(title="Title of a story here", source="BleepingComputer", tier=
                    excerpt=text, text=text, text_is_excerpt=False, cves=set(cves))
 
 
+def image_bytes(width=1200, height=700, fmt="JPEG", mode="RGB", **save) -> bytes:
+    out = io.BytesIO()
+    color = {"RGB": (30, 90, 160), "RGBA": (30, 90, 160, 128), "P": 5}[mode]
+    Image.new(mode, (width, height), color).save(out, fmt, **save)
+    return out.getvalue()
+
+
 def rss(*items: tuple[str, str, datetime, str]) -> bytes:
-    """Build a small RSS feed from (title, link, published, description) tuples."""
     body = "".join(
         f"<item><title>{t}</title><link>{link}</link><pubDate>{format_datetime(p)}</pubDate>"
         f"<description>{d}</description></item>"

@@ -1,5 +1,3 @@
-"""Stage 3: de-duplication, threat priority, story scoring, zero-day detection (FR-4 to FR-6, FR-10)."""
-
 from __future__ import annotations
 
 import re
@@ -39,7 +37,6 @@ def similar_titles(a: str, b: str, cfg: Config) -> bool:
 
 
 def dedupe(articles: list[Article], cfg: Config) -> list[Story]:
-    """One story per event: shared CVE ID, then canonical URL, then title similarity."""
     uf = _UnionFind(len(articles))
     first_with: dict[str, int] = {}
     for i, a in enumerate(articles):
@@ -61,7 +58,7 @@ def dedupe(articles: list[Article], cfg: Config) -> list[Story]:
 
 
 def cves_by_importance(stories: list[Story]) -> list[str]:
-    """CVE lookup order: most widely reported first, so the lookup cap drops the least covered."""
+    """Most widely reported first, so the lookup cap drops the least covered."""
     counts = Counter(c for s in stories for c in s.cves for _ in s.publishers)
     return [c for c, _ in counts.most_common()]
 
@@ -72,7 +69,7 @@ def _mentions(text: str, keywords: list[str]) -> bool:
 
 
 def is_zero_day(story: Story, cfg: Config) -> bool:
-    """FR-10: has a CVE, and an official source or two independent publishers call it a zero-day."""
+    """A CVE, plus an official source or two outlets calling it a zero-day."""
     if not story.cves:
         return False
     keywords = cfg.zero_day.keywords

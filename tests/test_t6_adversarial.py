@@ -1,6 +1,6 @@
-"""T6: hostile content cannot make the renderer read local files (such as the
-process environment holding the API keys) or reach the network (SR-2).
-SSRF and oversized responses are covered in test_safety.py."""
+"""Hostile content cannot make the renderer read local files (such as the process environment
+holding the API keys) or reach the network. SSRF and oversized responses are in test_safety.py.
+"""
 
 from __future__ import annotations
 
@@ -38,9 +38,9 @@ def test_hostile_headline_and_summary_are_escaped(cfg, no_network):
               summary=Summary(" ".join(HOSTILE), None))
     result = render_pdf(build_edition([s], cfg, NOW, ["Test"]))
     assert result.blocked == []  # escaped, so nothing was even requested
-    assert '<img src="file:///etc/passwd">' in pdf_text(result.pdf)  # printed as text
+    assert '<img src="file:///etc/passwd">' in pdf_text(result.pdf)
     assert b"/EmbeddedFile" not in result.pdf
-    assert pdf_links(result.pdf) == ["https://news.example.com/a"]  # only the feed's own link
+    assert pdf_links(result.pdf) == ["https://news.example.com/a"]
 
 
 def test_renderer_blocks_even_unescaped_html(no_network):

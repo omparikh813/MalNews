@@ -1,5 +1,3 @@
-"""FR-5, FR-7 to FR-9: NVD, CISA KEV and FIRST EPSS enrichment."""
-
 from __future__ import annotations
 
 import json
@@ -23,8 +21,6 @@ def nvd_body(**metrics) -> dict:
 def metric(score, kind="Primary", source="nvd@nist.gov"):
     return {"source": source, "type": kind, "cvssData": {"baseScore": score}}
 
-
-# --- parsing (FR-7) -------------------------------------------------------------
 
 def test_prefers_v31_primary():
     body = nvd_body(cvssMetricV31=[metric(7.5, "Secondary", "vendor"), metric(9.8)], cvssMetricV40=[metric(6.0)])
@@ -52,8 +48,6 @@ def test_pending_when_no_usable_score(body):
     assert info.status == "pending" and info.cvss is None
 
 
-# --- bands and priority (FR-5, FR-8) -------------------------------------------
-
 @pytest.mark.parametrize("score, name", [
     (10.0, "Critical"), (9.0, "Critical"), (8.9, "High"), (7.0, "High"), (6.9, "Medium"),
     (4.0, "Medium"), (3.9, "Low"), (0.1, "Low"), (0.0, "None"), (None, None),
@@ -71,8 +65,6 @@ def test_missing_values_count_as_zero(cfg):
     assert CveInfo("CVE-2026-0001", "pending").priority(cfg) == 0
     assert CveInfo("CVE-2026-0001", "pending", kev=True).priority(cfg) == pytest.approx(30)
 
-
-# --- the Enricher ----------------------------------------------------------------
 
 def world(**nvd) -> FakeFetcher:
     pages = {
@@ -124,7 +116,7 @@ def test_nvd_down_marks_unavailable_and_stops_asking(cfg):
     infos = e.lookup(["CVE-2026-0001", "CVE-2026-0002"])
     assert infos["CVE-2026-0001"].status == infos["CVE-2026-0002"].status == "unavailable"
     assert e.nvd_down and not any("CVE-2026-0002" in u and u.startswith(NVD) for u in f.requested)
-    assert infos["CVE-2026-0001"].kev  # KEV still applies
+    assert infos["CVE-2026-0001"].kev
 
 
 def test_unknown_cve_404_is_pending_not_an_outage(cfg):

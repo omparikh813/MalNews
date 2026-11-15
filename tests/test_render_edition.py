@@ -1,5 +1,3 @@
-"""FR-8, FR-17: the full Phase 2 edition layout."""
-
 from __future__ import annotations
 
 import io
@@ -13,13 +11,13 @@ from malnews.models import Story, Summary
 from malnews.render import build_edition, render_pdf
 from malnews.state import LinkRecord, StoryOfWeek, StoryRecord, WeeklyContent
 
-from .conftest import NOW, make_article
+from .conftest import NOW, image_bytes, make_article
 
 SENT = ("Attackers are exploiting the flaw to gain initial access to corporate networks and deploy "
         "web shells for persistence. ")
 
 
-def full_edition(cfg, n_stories=16):
+def full_edition(cfg, n_stories=16, images=None):
     infos = {
         "CVE-2026-10001": CveInfo("CVE-2026-10001", "scored", 9.8, "3.1", kev=True, epss=0.94),
         "CVE-2026-10002": CveInfo("CVE-2026-10002", "scored", 7.5, "3.1", epss=0.12),
@@ -46,7 +44,7 @@ def full_edition(cfg, n_stories=16):
                            score=0.5, links=[LinkRecord(publisher="Krebs", url="https://krebsonsecurity.com/x")],
                            text="Previous pick summary sentence. Another one.", summary=None)
     return build_edition(stories, cfg, NOW, ["CISA", "Krebs"], weekly, replaced, infos,
-                         replaced_summary="The previous pick, summarized by AI when it was chosen.")
+                         replaced_summary="The previous pick, summarized by AI when it was chosen.", images=images)
 
 
 def pdf_text(pdf):
@@ -80,7 +78,7 @@ def test_cve_links_point_to_cve_org_and_nvd(cfg, no_network):
 def test_word_budget_drops_lowest_headlines(cfg):
     edition = full_edition(cfg, n_stories=40)
     assert edition.words <= cfg.layout.max_words and edition.dropped > 0
-    assert len(edition.context["new_threats"]) == 2  # threats are never dropped for length
+    assert len(edition.context["new_threats"]) == 2
 
 
 @pytest.mark.parametrize("cvss, label", [(9.0, "Critical 9.0"), (0.0, "None 0.0")])
@@ -93,7 +91,6 @@ def test_score_and_band_name_both_printed(cfg, cvss, label, no_network):
 
 
 def test_story_of_week_shown_once(cfg):
-    """A story that is also today's news appears only as the Story of the Week."""
     today = Story(articles=[make_article("Week's biggest breach story", url="https://news.example.com/sotw")],
                   summary=Summary("S.", None))
     weekly = StoryOfWeek(story=StoryRecord(id="https://news.example.com/sotw", day=NOW.date() - timedelta(1),
@@ -105,8 +102,6 @@ def test_story_of_week_shown_once(cfg):
 
 
 def test_no_excerpts_anywhere(cfg, no_network):
-    """Stories without an AI summary, an excerpt-only Story of the Week, and a replaced pick with
-    no summary are all left out rather than printed."""
     ai = Story(articles=[make_article("Story with an AI summary", url="https://a.example.com/1")],
                summary=Summary("Written by the model.", None))
     raw = Story(articles=[make_article("Story the model could not summarize", url="https://a.example.com/2",
@@ -123,3 +118,42 @@ def test_no_excerpts_anywhere(cfg, no_network):
     assert [v["title"] for v in ctx["news_of_the_day"] + ctx["headlines"]] == ["Story with an AI summary"]
     _, text = pdf_text(render_pdf(edition).pdf)
     assert "excerpt" not in text.lower() and "Raw article text" not in text and "First two sentences" not in text
+
+
+def with_photos(cfg, tmp_path, keys=("https://news.example.com/sotw", "https://news.example.com/1")):
+    from malnews.images import StoryImage
+
+    images = {}
+    for i, key in enumerate(keys):
+        path = tmp_path / f"{i}.jpg"
+        path.write_bytes(image_bytes(1000, 560))
+        images[key] = StoryImage(path, f"Publisher {i}", f"https://news.example.com/{i}")
+    return full_edition(cfg, images=images), images
+
+
+def test_photos_appear_with_credit_and_link(cfg, tmp_path, no_network):
+    edition, _ = with_photos(cfg, tmp_path)
+    ctx = edition.context
+    assert ctx["story_of_week"]["image"]["credit"] == "Publisher 0"
+    assert ctx["news_of_the_day"][0]["image"]["href"] == "https://news.example.com/1"
+    result = render_pdf(edition, tmp_path)
+    reader, text = pdf_text(result.pdf)
+    assert result.blocked == [] and len({im.name for p in reader.pages for im in p.images}) == 2
+    assert "Image: Publisher 0" in text and "Image: Publisher 1" in text
+    assert 2 <= len(reader.pages) <= 4 and len(result.pdf) < 1_000_000
+
+
+def test_only_the_top_news_story_gets_a_photo(cfg, tmp_path):
+    edition, _ = with_photos(cfg, tmp_path, keys=("https://news.example.com/2", "https://news.example.com/3"))
+    ctx = edition.context
+    assert ctx["story_of_week"]["image"] is None
+    assert all(s["image"] is None for s in ctx["news_of_the_day"] + ctx["new_threats"] + ctx["headlines"])
+
+
+def test_photo_with_unsafe_credit_link_is_dropped(cfg, tmp_path):
+    from malnews.images import StoryImage
+
+    path = tmp_path / "x.jpg"
+    path.write_bytes(image_bytes(1000, 560))
+    bad = {"https://news.example.com/1": StoryImage(path, "P", "javascript:alert(1)")}
+    assert full_edition(cfg, images=bad).context["news_of_the_day"][0]["image"] is None

@@ -1,5 +1,3 @@
-"""Data passed between pipeline stages."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,14 +11,15 @@ if TYPE_CHECKING:
 @dataclass
 class Article:
     source: str
-    tier: str  # "official" or "news"
+    tier: str
     title: str
-    url: str  # https, validated by safety.safe_href
-    published: datetime  # timezone-aware UTC
+    url: str
+    published: datetime
     excerpt: str
     text: str
     text_is_excerpt: bool
     cves: set[str] = field(default_factory=set)
+    image_url: str | None = None
 
 
 @dataclass
@@ -33,10 +32,10 @@ class Summary:
 class Story:
     articles: list[Article]
     score: float = 0.0
-    priority: float = 0.0  # FR-5: highest priority among the story's CVEs
+    priority: float = 0.0
     impact: bool = False
-    zero_day: bool = False  # FR-10
-    cve_infos: list[CveInfo] = field(default_factory=list)  # highest priority first
+    zero_day: bool = False
+    cve_infos: list[CveInfo] = field(default_factory=list)
     summary: Summary | None = None
 
     @property
@@ -45,16 +44,21 @@ class Story:
 
     @property
     def id(self) -> str:
-        """Stable identity across runs: the primary article's URL."""
+        """Stable across runs: the primary article's URL."""
         return self.primary.url
 
     @property
     def primary(self) -> Article:
-        """The article to summarize: official first, then full text over excerpt, then longest."""
+        """Official first, then full text over feed excerpt, then longest."""
         return max(
             self.articles,
             key=lambda a: (a.tier == "official", not a.text_is_excerpt, len(a.text)),
         )
+
+    @property
+    def image_source(self) -> Article | None:
+        with_image = [a for a in self.articles if a.image_url]
+        return max(with_image, key=lambda a: (a.tier == "official", not a.text_is_excerpt, len(a.text)), default=None)
 
     @property
     def title(self) -> str:
@@ -74,7 +78,6 @@ class Story:
 
     @property
     def links(self) -> list[tuple[str, str]]:
-        """(publisher, url) for every source article, de-duplicated, in source order."""
         seen: set[str] = set()
         out = []
         for a in sorted(self.articles, key=lambda a: (a.tier != "official", a.source)):

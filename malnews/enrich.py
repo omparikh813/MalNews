@@ -1,9 +1,3 @@
-"""Stage 2: official severity data for each CVE (FR-5, FR-7 to FR-9).
-
-NVD gives the CVSS score, CISA KEV says whether it is exploited in the wild,
-and FIRST EPSS estimates how likely exploitation is. None of it comes from AI.
-"""
-
 from __future__ import annotations
 
 import json
@@ -20,7 +14,6 @@ log = logging.getLogger(__name__)
 
 CVE_ID_RE = re.compile(r"^CVE-\d{4}-\d{4,}$")
 
-# FR-8 bands: (lowest score, name)
 BANDS = [(9.0, "Critical"), (7.0, "High"), (4.0, "Medium"), (0.1, "Low"), (0.0, "None")]
 
 
@@ -44,13 +37,13 @@ class CveInfo:
         return band(self.cvss)
 
     def priority(self, cfg: Config) -> float:
-        """FR-5. A missing CVSS or EPSS counts as 0, so unscored CVEs never rank high by accident."""
+        """A missing CVSS or EPSS counts as 0, so unscored CVEs never rank high by accident."""
         w = cfg.priority
         return 100 * (w.cvss * (self.cvss or 0) / 10 + w.epss * (self.epss or 0) + w.kev * self.kev)
 
 
 def parse_nvd(cve_id: str, body: dict) -> CveInfo:
-    """Prefer CVSS v3.1, then v4.0, then v3.0; within a version prefer NVD's own (Primary) score."""
+    """Prefer CVSS v3.1, then v4.0, then v3.0, and NVD's own (Primary) score within a version."""
     vulns = body.get("vulnerabilities") or []
     if not vulns:
         return CveInfo(cve_id, "pending")  # NVD has no record yet
@@ -133,13 +126,12 @@ class Enricher:
             self.nvd_down = True
             return CveInfo(cve_id, "unavailable")
         except (FetchError, ValueError) as e:
-            # FR-9: print "Score unavailable" and continue; stop asking NVD for the rest of the run.
+            # NVD is down: print "Score unavailable" and stop asking for the rest of the run.
             log.warning("NVD unavailable (%s); remaining CVEs show 'Score unavailable'", e)
             self.nvd_down = True
             return CveInfo(cve_id, "unavailable")
 
     def lookup(self, cve_ids: Iterable[str]) -> dict[str, CveInfo]:
-        """Look up each CVE once per run (cached). Order matters: lookups stop at the cap."""
         todo = [c for c in dict.fromkeys(cve_ids) if CVE_ID_RE.match(c) and c not in self.cache]
         if todo:
             kev = self._load_kev()

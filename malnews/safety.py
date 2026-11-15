@@ -1,9 +1,3 @@
-"""Security controls shared by the pipeline (PRD §3).
-
-SR-2  safe_href, RenderURLFetcher   rendering cannot read files or reach the network
-SR-6  SafeFetcher, RobotsCache      outbound HTTP cannot reach internal addresses
-"""
-
 from __future__ import annotations
 
 import html
@@ -27,21 +21,15 @@ CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.IGNORECASE)
 
 
 def extract_cves(text: str) -> set[str]:
-    """FR-7: CVE IDs come from source text by regex, never from AI."""
     return {m.upper() for m in CVE_RE.findall(text)}
 
 
-# --------------------------------------------------------------------------
-# Text and links
-# --------------------------------------------------------------------------
-
 _TAG_RE = re.compile(r"<[^>]*>")
-_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f​-‏‪-‮⁦-⁩]")
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
 _WS_RE = re.compile(r"\s+")
 
 
 def clean_text(value: str | None, limit: int | None = None) -> str:
-    """Feed HTML to plain text. Output is still untrusted and is escaped at render time."""
     text = html.unescape(_TAG_RE.sub(" ", value or ""))
     text = _WS_RE.sub(" ", _CTRL_RE.sub("", text)).strip()
     return text[:limit] if limit else text
@@ -52,11 +40,7 @@ _HOST_RE = re.compile(r"^[a-z0-9.-]+$")
 
 
 def safe_href(url: str | None) -> str | None:
-    """Return an https URL safe to print as a link, or None (SR-2).
-
-    Rejects javascript:, data:, file: and anything that is not http(s);
-    upgrades http to https; rejects credentials, odd hosts and control chars.
-    """
+    """A plain https link, or None for anything else (javascript:, data:, file:, credentials, odd ports)."""
     if not url or len(url) > 2048 or _CTRL_RE.search(url) or re.search(r"\s", url):
         return None
     try:
@@ -75,16 +59,11 @@ def safe_href(url: str | None) -> str | None:
 
 
 def canonical_url(url: str) -> str:
-    """FR-4: canonical form for de-duplication (no tracking params, fragment or trailing slash)."""
     parts = urlsplit(url)
     host = (parts.hostname or "").lower().removeprefix("www.")
     query = urlencode([(k, v) for k, v in parse_qsl(parts.query) if not _TRACKING_PARAMS.match(k)])
     return urlunsplit(("https", host, parts.path.rstrip("/") or "/", query, ""))
 
-
-# --------------------------------------------------------------------------
-# SR-6: outbound fetching
-# --------------------------------------------------------------------------
 
 class FetchError(Exception):
     pass
@@ -108,14 +87,13 @@ def is_public_ip(value: str) -> bool:
 
 
 def check_url(url: str) -> None:
-    """http(s) only, no credentials, and the host must resolve only to public addresses."""
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
         raise BlockedURL(f"URL not allowed: {url[:80]}")
     try:
         literal = is_public_ip(parts.hostname)
     except ValueError:
-        literal = None  # a hostname, not an IP address
+        literal = None
     if literal is False:
         raise BlockedURL(f"{parts.hostname} is a non-public address")
     try:
@@ -133,11 +111,7 @@ class FetchResult:
 
 
 class SafeFetcher:
-    """The only way the pipeline reads from the internet (SR-6).
-
-    Every URL, including each redirect hop, must be http(s) and resolve to a
-    public address. Responses are size-capped and TLS is always verified.
-    """
+    """The only way the pipeline reads the internet. Every URL, including each redirect hop, must resolve to a public address."""
 
     def __init__(self, *, user_agent: str, timeout: float, retries: int, max_redirects: int, max_bytes: int):
         self.timeout = timeout
@@ -150,7 +124,7 @@ class SafeFetcher:
         self.session.headers["User-Agent"] = user_agent
 
     def get(self, url: str, max_bytes: int | None = None, headers: dict[str, str] | None = None) -> FetchResult:
-        """headers (e.g. an API key) are sent only to the original host, never to a redirect target."""
+        """headers (such as an API key) go only to the original host, never to a redirect target."""
         last: Exception | None = None
         for attempt in range(self.retries + 1):
             if attempt:
@@ -187,7 +161,7 @@ class SafeFetcher:
 
 
 class RobotsCache:
-    """FR-2: honor robots.txt. 404 means allowed; any other failure means not allowed."""
+    """404 means allowed; any other failure means not allowed."""
 
     def __init__(self, fetcher, user_agent: str):
         self.fetcher = fetcher
@@ -215,17 +189,8 @@ class RobotsCache:
         return parser
 
 
-# --------------------------------------------------------------------------
-# SR-2: renderer resource fetching
-# --------------------------------------------------------------------------
-
 class RenderURLFetcher(URLFetcher):
-    """WeasyPrint may only read files inside the given directories.
-
-    Everything else (file:// elsewhere, http(s), data:) is refused and recorded
-    in self.blocked, so untrusted text in the PDF can never embed runner files
-    such as /proc/self/environ (which holds the API keys) or make requests.
-    """
+    """Refuses everything outside the given folders, so untrusted text can't pull in files like /proc/self/environ."""
 
     def __init__(self, allowed_dirs: list[Path]):
         super().__init__(allowed_protocols={"file"})

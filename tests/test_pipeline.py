@@ -1,5 +1,3 @@
-"""T1: collection, dedupe, scoring, summaries, 429 stop, request budget, model allowlist."""
-
 from __future__ import annotations
 
 from datetime import timedelta
@@ -22,8 +20,6 @@ CISA = "https://www.cisa.gov/cybersecurity-advisories/all.xml"
 BC = "https://www.bleepingcomputer.com/feed/"
 
 
-# --- collection (FR-2, FR-3, FR-7) --------------------------------------------
-
 def test_collect(cfg, sources, no_network):
     fetcher = FakeFetcher({
         CISA: rss(
@@ -40,10 +36,10 @@ def test_collect(cfg, sources, no_network):
     by_title = {a.title: a for a in articles}
 
     assert set(by_title) == {"Vendor flaw CVE-2026-1111 exploited", "Ransomware hits hospital"}
-    assert report.ok == ["CISA", "BleepingComputer"] and len(report.failed) == 3  # FR-3: others skipped
+    assert report.ok == ["CISA", "BleepingComputer"] and len(report.failed) == 3
     assert by_title["Vendor flaw CVE-2026-1111 exploited"].cves == {"CVE-2026-1111"}
     assert not by_title["Vendor flaw CVE-2026-1111 exploited"].text_is_excerpt
-    assert by_title["Ransomware hits hospital"].text_is_excerpt  # article 404 -> feed excerpt
+    assert by_title["Ransomware hits hospital"].text_is_excerpt
     assert by_title["Ransomware hits hospital"].url == "https://www.bleepingcomputer.com/b"
 
 
@@ -51,7 +47,7 @@ def test_feeds_get_the_larger_cap(cfg, sources, no_network):
     fetcher = FakeFetcher({CISA: rss(("A story title here", "https://www.cisa.gov/a", NOW, "x"))})
     collect(sources, fetcher, NOW, cfg)
     assert fetcher.caps[CISA] == cfg.collection.max_feed_bytes
-    assert fetcher.caps["https://www.cisa.gov/a"] is None  # articles use the default 5 MB cap
+    assert fetcher.caps["https://www.cisa.gov/a"] is None
 
 
 def test_site_that_rate_limits_is_left_alone(cfg, sources, no_network):
@@ -62,15 +58,13 @@ def test_site_that_rate_limits_is_left_alone(cfg, sources, no_network):
     articles, _ = collect(sources, fetcher, NOW, cfg)
     assert len(articles) == 4 and all(a.text_is_excerpt for a in articles)
     article_hits = [u for u in fetcher.requested if u.startswith("https://www.bleepingcomputer.com/") and u[-1].isdigit()]
-    assert article_hits == ["https://www.bleepingcomputer.com/0"]  # stopped after the first 429
+    assert article_hits == ["https://www.bleepingcomputer.com/0"]
 
 
 def test_all_sources_failed(cfg, sources, no_network):
     with pytest.raises(AllSourcesFailed):
         collect(sources, FakeFetcher({}), NOW, cfg)
 
-
-# --- dedupe and ranking (FR-4, FR-6) -------------------------------------------
 
 def test_dedupe_by_cve_url_and_title(cfg):
     arts = [
@@ -98,8 +92,6 @@ def test_official_counts_double_and_impact(cfg):
     assert top.primary is official
 
 
-# --- summaries (FR-11 to FR-14) ---------------------------------------------
-
 class ScriptedClient:
     def __init__(self, *answers):
         self.answers = list(answers)
@@ -123,7 +115,7 @@ def story():
     "**Summary:** Acme patched a VPN flaw.\nAttackers used it.\n**Fix:** Update to 2.1.",
     "<think>The user wants a summary. Let me read it.</think>\nAcme patched a VPN flaw. Attackers used it.\nFix: Update to 2.1.",
     "```\nAcme patched a VPN flaw. Attackers used it.\nFix: Update to 2.1.\n```",
-    '{"summary": "Acme patched a VPN flaw. Attackers used it.", "mitigation": "Update to 2.1."}',  # JSON still works
+    '{"summary": "Acme patched a VPN flaw. Attackers used it.", "mitigation": "Update to 2.1."}',
 ])
 def test_parse_plain_text_summary(raw):
     assert parse_summary(raw) == ("Acme patched a VPN flaw. Attackers used it.", "Update to 2.1.")
@@ -161,7 +153,7 @@ def test_parse_weekly_unlabeled_and_partial():
 def test_three_attempts_then_left_out(cfg):
     client = ScriptedClient("")
     s = Summarizer(client, cfg.ai)
-    assert s.summarize(story()) is None  # no excerpt: the story is left out
+    assert s.summarize(story()) is None
     assert client.calls == ATTEMPTS == 3 and s.stats.failed == 1
 
 
@@ -279,7 +271,7 @@ def test_reasoning_setting_can_be_turned_off(cfg):
 def test_whole_article_is_sent(cfg):
     from malnews.summarize import build_user_message
 
-    text = "word " * 3500  # 17,500 characters: more than the old 6,000-character cut-off
+    text = "word " * 3500
     assert text.strip() in build_user_message("T", text.strip(), cfg.ai.max_input_chars)
 
 
@@ -289,7 +281,7 @@ def test_openrouter_request(cfg):
     assert client.complete("s", "u") == "hi"
     assert http.sent["headers"]["Authorization"] == "Bearer sk-or-test-000000"
     assert http.sent["timeout"] == cfg.ai.timeout_seconds
-    assert "response_format" not in http.sent["json"]  # FR-12
+    assert "response_format" not in http.sent["json"]
 
 
 def test_weekly_none_when_unusable(cfg):

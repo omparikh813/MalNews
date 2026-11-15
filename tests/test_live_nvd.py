@@ -2,8 +2,8 @@
 
     pytest -m live -s
 
-Uses NVD_API_KEY from .env if present (faster). Compares what MalNews prints
-against NVD's own record for each CVE, fetched separately.
+Uses NVD_API_KEY from .env if present (faster). Compares what MalNews prints against NVD's own record
+for each CVE, fetched separately.
 """
 
 from __future__ import annotations
@@ -22,12 +22,12 @@ pytestmark = pytest.mark.live
 
 SAMPLES = [
     "CVE-2021-44228",  # Log4Shell
-    "CVE-2023-4966",   # Citrix Bleed
-    "CVE-2024-3400",   # PAN-OS GlobalProtect
+    "CVE-2023-4966",  # Citrix Bleed
+    "CVE-2024-3400",  # PAN-OS GlobalProtect
     "CVE-2023-34362",  # MOVEit Transfer
-    "CVE-2024-6387",   # regreSSHion
+    "CVE-2024-6387",  # regreSSHion
     "CVE-2023-44487",  # HTTP/2 Rapid Reset
-    "CVE-2024-3094",   # xz backdoor
+    "CVE-2024-3094",  # xz backdoor
     "CVE-2023-20198",  # Cisco IOS XE
     "CVE-2022-30190",  # Follina
     "CVE-2021-26855",  # ProxyLogon
@@ -35,7 +35,6 @@ SAMPLES = [
 
 
 def nvd_reference(cve: str, key: str | None) -> float | None:
-    """NVD's own Primary CVSS v3.1 score, read directly from the API."""
     headers = {"apiKey": key} if key else {}
     body = requests.get("https://services.nvd.nist.gov/rest/json/cves/2.0", params={"cveId": cve},
                         headers=headers, timeout=30).json()
@@ -66,4 +65,4 @@ def test_ten_cves_match_nvd(cfg):
         if expected is not None:
             assert info.cvss == expected, cve
     print("\n" + "\n".join(rows))
-    assert infos["CVE-2021-44228"].kev  # Log4Shell is in CISA KEV
+    assert infos["CVE-2021-44228"].kev
