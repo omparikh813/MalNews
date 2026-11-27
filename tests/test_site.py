@@ -166,3 +166,22 @@ def test_scripts_only_talk_to_this_site():
 
 def test_archive_row_dates_parse():
     assert date.fromisoformat("2026-11-16").strftime("%a") == "Mon"
+
+
+def test_site_files_are_linked_with_a_version_that_tracks_their_content(tmp_path, monkeypatch):
+    html = (build(tmp_path) / "index.html").read_text()
+    versions = dict(re.findall(r'(?:href|src)="((?:index\.css|app\.js|theme\.js|favicon\.svg))\?v=([0-9a-f]{10})"', html))
+    assert set(versions) == set(SITE_FILES)
+
+    from malnews import publish
+
+    before = publish.asset_versions()
+    css = ROOT / "templates" / "index.css"
+    monkeypatch.setattr(publish, "TEMPLATES", tmp_path)
+    for name in SITE_FILES:
+        (tmp_path / name).write_text("same")
+    same = publish.asset_versions()
+    (tmp_path / "index.css").write_text("changed")
+    changed = publish.asset_versions()
+    assert before["index.css"] == versions["index.css"] and css.exists()
+    assert same["app.js"] == changed["app.js"] and same["index.css"] != changed["index.css"]
