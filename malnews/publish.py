@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -161,6 +162,12 @@ def search_index(archive: Path) -> dict[str, str]:
     return index
 
 
+def asset_versions() -> dict[str, str]:
+    """A short fingerprint per site file. Browsers cache Pages files for 10 minutes, so each file is linked with
+    ?v=<fingerprint>: when a file changes its address changes, and nobody sees a stale copy."""
+    return {name: hashlib.sha256((TEMPLATES / name).read_bytes()).hexdigest()[:10] for name in SITE_FILES}
+
+
 def write_site(pdf: bytes, out_dir: Path, day: str, context: dict) -> None:
     archive = out_dir / "archive"
     archive.mkdir(parents=True, exist_ok=True)
@@ -178,7 +185,7 @@ def write_site(pdf: bytes, out_dir: Path, day: str, context: dict) -> None:
         groups=headline_groups(today) if today else [], counts=headline_counts(today) if today else {},
         kpis={"cves": snap["total"] if snap else 0, "kev": snap["kev"] if snap else 0,
               "highest": (snap["highest"] if snap else None) or "–"},
-        bar=severity_bar(snap))
+        bar=severity_bar(snap), assets=asset_versions())
     (out_dir / "index.html").write_text(html, encoding="utf-8")
     for name in SITE_FILES:
         shutil.copyfile(TEMPLATES / name, out_dir / name)
