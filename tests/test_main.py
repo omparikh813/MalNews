@@ -85,7 +85,9 @@ def test_full_run_writes_site(tmp_path, env, fake_world, no_network):
     assert "storyoftheweek" in flat and "weeklyhappened." in flat
     assert "critical9.8" in flat and "knownexploited" in flat and "scorepending" in flat
     index = (tmp_path / "index.html").read_text()
-    assert "default-src 'none'" in index and "<script" not in index
+    assert "default-src 'none'" in index and "script-src 'self'" in index
+    assert "Today’s headlines" in index and "A short summary." in index and "Vendor flaw" in index
+    assert json.loads((tmp_path / "archive" / f"{next((tmp_path / 'archive').glob('*.pdf')).stem}.json").read_text())["stories"]
 
 
 def test_pending_cves_are_tracked_between_runs(tmp_path, env, fake_world, no_network):

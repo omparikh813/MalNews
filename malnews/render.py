@@ -102,9 +102,9 @@ def _image_view(image: StoryImage | None, title: str) -> dict | None:
     return {"src": image.path.resolve().as_uri(), "credit": image.credit, "href": href, "alt": title}
 
 
-def _view(title, summary, mitigation, links, cves, image=None) -> dict:
+def _view(title, summary, mitigation, links, cves, image=None, zero_day=False) -> dict:
     return {
-        "title": title, "summary": summary or "", "mitigation": mitigation,
+        "title": title, "summary": summary or "", "mitigation": mitigation, "zero_day": zero_day,
         "links": _links(links), "cves": cves, "top": _top_band(cves), "kev": any(c["kev"] for c in cves),
         "image": _image_view(image, title),
         "words": _words(title, summary, mitigation) + 2 * len(links) + 4 * len(cves),
@@ -114,7 +114,7 @@ def _view(title, summary, mitigation, links, cves, image=None) -> dict:
 def story_view(s: Story, image: StoryImage | None = None) -> dict:
     sm = s.summary
     return _view(s.title, sm.summary if sm else "", sm.mitigation if sm else None, s.links,
-                 _cve_views(s.cve_infos), image)
+                 _cve_views(s.cve_infos), image, s.zero_day)
 
 
 def _record_cves(record: StoryRecord, infos: dict[str, CveInfo], cfg: Config) -> list[dict]:

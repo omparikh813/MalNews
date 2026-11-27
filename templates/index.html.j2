@@ -3,19 +3,157 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
-<title>MalNews</title>
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="A daily five-minute security briefing with official CVE scores.">
+<title>MalNews: daily security briefing</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="index.css">
+<script src="theme.js"></script>
+<script src="app.js" defer></script>
 </head>
 <body>
-<h1>MalNews</h1>
-<p>A five-minute daily security briefing. <a href="latest.pdf">Read today’s edition</a>.</p>
-<h2>Editions</h2>
-<ul>
-{% for day in days %}
-  <li><a href="archive/{{ day }}.pdf">{{ day }}</a></li>
-{% endfor %}
-</ul>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="bar">
+  <div class="wrap bar-inner">
+    <a class="brand" href="#top">MalNews</a>
+    <nav aria-label="Page sections">
+      <a href="#today">Today</a>
+      <a href="#headlines">Headlines</a>
+      <a href="#archive">Archive</a>
+      <a href="#about">About</a>
+    </nav>
+    <button id="theme-toggle" class="btn quiet" type="button" aria-pressed="false" hidden>Dark mode</button>
+  </div>
+</header>
+
+<main id="main">
+{% if today %}
+<section id="today" class="hero" aria-labelledby="today-title">
+  <div class="wrap hero-inner">
+    <div class="hero-copy">
+      <p class="eyebrow">Today’s edition · No. {{ today.edition }}</p>
+      <h1 id="today-title">{{ today.date_long }}</h1>
+      <p class="hero-meta">{{ today.read_minutes }} min read · Updated {{ today.generated }} · PDF, {{ today.pdf_kb }} KB</p>
+      <div class="actions">
+        <a class="btn primary" href="latest.pdf">Open today’s PDF</a>
+        <a class="btn on-dark" href="latest.pdf" download="MalNews-{{ today.date }}.pdf">Download</a>
+      </div>
+    </div>
+    <div class="hero-stats">
+      <dl class="kpis">
+        <div class="kpi"><dt>Stories</dt><dd>{{ today.stories | length }}</dd></div>
+        <div class="kpi"><dt>CVEs</dt><dd>{{ kpis.cves }}</dd></div>
+        <div class="kpi"><dt>Known Exploited</dt><dd>{{ kpis.kev }}</dd></div>
+        <div class="kpi"><dt>Highest score</dt><dd>{{ kpis.highest }}</dd></div>
+      </dl>
+      {% if bar %}
+      <figure class="severity">
+        <svg viewBox="0 0 100 3" preserveAspectRatio="none" role="img" aria-label="Today’s CVEs by severity: {% for s in bar %}{{ s.count }} {{ s.label | lower }}{{ ', ' if not loop.last }}{% endfor %}">
+          {% for s in bar %}<rect class="sev-{{ s.cls }}" x="{{ s.x }}" y="0" width="{{ s.w }}" height="3"/>{% endfor %}
+        </svg>
+        <figcaption>{% for s in bar %}<span><i class="dot sev-{{ s.cls }}"></i>{{ s.label }} {{ s.count }}</span>{% endfor %}</figcaption>
+      </figure>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<div class="wrap layout">
+  <section id="edition" class="panel viewer" aria-labelledby="viewer-title">
+    <h2 id="viewer-title" class="panel-title">The edition</h2>
+    <iframe src="latest.pdf#view=FitH" title="Today’s MalNews edition (PDF)" loading="lazy"></iframe>
+    <p class="hint">PDF not showing? <a href="latest.pdf">Open it in a new view</a>.</p>
+  </section>
+
+  <section id="headlines" class="panel stories" aria-labelledby="headlines-title">
+    <h2 id="headlines-title" class="panel-title">Today’s headlines</h2>
+    <div class="chips" role="group" aria-label="Filter headlines" hidden>
+      <button class="chip" type="button" data-filter="all" aria-pressed="true">All <span>{{ counts.all }}</span></button>
+      {% if counts.critical %}<button class="chip" type="button" data-filter="critical" aria-pressed="false">Critical <span>{{ counts.critical }}</span></button>{% endif %}
+      {% if counts.high %}<button class="chip" type="button" data-filter="high" aria-pressed="false">High <span>{{ counts.high }}</span></button>{% endif %}
+      {% if counts.kev %}<button class="chip" type="button" data-filter="kev" aria-pressed="false">Known Exploited <span>{{ counts.kev }}</span></button>{% endif %}
+      {% if counts.zero %}<button class="chip" type="button" data-filter="zero" aria-pressed="false">Zero-day <span>{{ counts.zero }}</span></button>{% endif %}
+    </div>
+    <p id="headline-status" class="status" role="status">{{ counts.all }} headlines</p>
+
+    {% for label, items in groups %}
+    <div class="group">
+      <h3 class="group-title">{{ label }}</h3>
+      {% for s in items %}
+      <article class="card" data-band="{{ s.band | lower if s.band else 'none' }}" data-kev="{{ 1 if s.kev else 0 }}" data-zero="{{ 1 if s.zero_day else 0 }}">
+        {% if s.band or s.kev or s.zero_day %}
+        <p class="tags">
+          {% if s.band %}<span class="tag sev-{{ s.band | lower }}">{{ s.band }} {{ s.score }}</span>{% endif %}
+          {% if s.kev %}<span class="tag outline">Known Exploited</span>{% endif %}
+          {% if s.zero_day %}<span class="tag outline">Zero-day</span>{% endif %}
+        </p>
+        {% endif %}
+        <h4 class="card-title">{% if s.links %}<a href="{{ s.links[0][1] }}" rel="noopener noreferrer">{{ s.title }}</a>{% else %}{{ s.title }}{% endif %}</h4>
+        <p class="card-text">{{ s.summary }}</p>
+        {% if s.fix %}<p class="card-fix"><strong>Fix:</strong> {{ s.fix }}</p>{% endif %}
+        {% if s.cves or s.links %}
+        <p class="card-meta">
+          {% for c in s.cves %}<a class="cve" href="{{ c.url }}" rel="noopener noreferrer">{{ c.id }}</a>{% endfor %}
+          {% for publisher, href in s.links %}<a class="src" href="{{ href }}" rel="noopener noreferrer">{{ publisher }}</a>{% endfor %}
+        </p>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </section>
+</div>
+{% endif %}
+
+<div class="wrap">
+<section id="archive" class="panel archive" aria-labelledby="archive-title">
+  <h2 id="archive-title" class="panel-title">Past editions</h2>
+  <div id="archive-tools" class="tools" hidden>
+    <label for="archive-search">Search past editions</label>
+    <input id="archive-search" type="search" autocomplete="off" placeholder="A headline word or a CVE ID">
+  </div>
+  <p id="archive-status" class="status" role="status"></p>
+  {% for month in months %}
+  <details class="month"{{ ' open' if loop.first }}>
+    <summary>{{ month.label }} <span class="count">{{ month.rows | length }} edition{{ '' if month.rows | length == 1 else 's' }}</span></summary>
+    <ul class="editions">
+      {% for r in month.rows %}
+      <li class="edition" data-date="{{ r.day }}">
+        <a class="row" href="{{ r.href }}">
+          <span class="row-date">{{ r.label }}</span>
+          <span class="row-title">{{ r.title or 'Daily briefing' }}</span>
+          <span class="row-tags">
+            {% if r.highest %}<span class="tag sev-{{ r.band | lower }}">{{ r.band }} {{ r.highest }}</span>{% endif %}
+            {% if r.kev %}<span class="tag outline">{{ r.kev }} exploited</span>{% endif %}
+          </span>
+          <span class="row-open">PDF</span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endfor %}
+</section>
+</div>
+
+<section id="about" class="wrap about" aria-labelledby="about-title">
+  <h2 id="about-title" class="panel-title">About MalNews</h2>
+  <div class="about-grid">
+    <div><h3>Where the news comes from</h3><p>Five security news sources, checked every morning for the last 24 hours. Stories about the same event are merged into one.</p></div>
+    <div><h3>Where the scores come from</h3><p>CVE IDs, scores and exploit data come from NVD, CISA’s Known Exploited Vulnerabilities list and FIRST EPSS. AI never writes a score.</p></div>
+    <div><h3>What the AI does</h3><p>It summarizes each article in a few sentences. Read the linked article for the full story.</p></div>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-inner">
+    <span>MalNews · a new edition every day at 6:00 AM PST</span>
+    <a href="{{ repo_url }}" rel="noopener noreferrer">Source code on GitHub</a>
+  </div>
+</footer>
 </body>
 </html>

@@ -148,7 +148,7 @@ def run(max_requests: int | None, out_dir: Path, state_path: Path) -> int:
         result = render_pdf(edition, Path(tmp), cfg.roundup.min_rows)
     if result.blocked:
         log.warning("renderer blocked %d resource request(s)", len(result.blocked))
-    write_site(result.pdf, out_dir, today.isoformat())  # only reached when every step succeeded
+    write_site(result.pdf, out_dir, today.isoformat(), edition.context)  # only reached when every step succeeded
 
     remember(state, [to_record(s, today, cfg) for s in stories[:per_day]], today, cfg)
     for cve, info in infos.items():

@@ -107,4 +107,30 @@ Dependabot alerts and private vulnerability reporting. Under **Settings → Acti
 A small `keepalive` workflow commits to the `data` branch once a month. GitHub switches off scheduled
 workflows after 60 days without repository activity, and this keeps the daily run alive even if it fails for a while.
 
+## Customize the website
+
+The site is built from four files in `templates/`. Edit them, rebuild, and refresh.
+
+| File | What it controls |
+|---|---|
+| `index.css` | Every color, size and space. The design tokens are at the top (`--accent`, `--navy`, `--bg`, the severity colors, the spacing scale). Change `--accent` to restyle every button and chip. |
+| `index.html.j2` | The page's structure and wording: section titles, button labels, the About text. |
+| `app.js` | The headline filters, archive search and dark-mode toggle. It only shows and hides things already on the page. |
+| `favicon.svg` | The browser tab icon. |
+
+Preview your change locally:
+```bash
+python main.py --max-requests 10          # rebuilds site/
+python -m http.server -d site 8000        # open http://localhost:8000
+```
+
+Keep these rules, which the tests check:
+- No inline `<script>`, `style=` or `onclick=`. The page's content policy only allows files from the site itself.
+- Show feed text only through the template (it is escaped automatically). Never build HTML from it in JavaScript.
+- External links keep `rel="noopener noreferrer"`.
+
+The home page shows today's headlines (filterable), the edition PDF beside them on wide screens (phones get the headlines and
+an "Open today's PDF" button), and past editions by month with search. Each edition's headlines are saved as
+`archive/YYYY-MM-DD.json` next to its PDF, which is what the archive and search read.
+
 Fonts: Caladea, SIL Open Font License 1.1 (`fonts/OFL.txt`).

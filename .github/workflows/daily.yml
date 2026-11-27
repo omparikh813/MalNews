@@ -83,6 +83,7 @@ jobs:
           path: |
             state.json
             site/archive/${{ steps.day.outputs.day }}.pdf
+            site/archive/${{ steps.day.outputs.day }}.json
           retention-days: 7
 
   deploy:
@@ -129,6 +130,6 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP_DIR/data-files/archive"
           cp "$EDITION_DIR/state.json" "$RUNNER_TEMP_DIR/data-files/state.json"
-          cp "$EDITION_DIR/site/archive/$DAY.pdf" "$RUNNER_TEMP_DIR/data-files/archive/"
+          cp "$EDITION_DIR/site/archive/$DAY.pdf" "$EDITION_DIR/site/archive/$DAY.json" "$RUNNER_TEMP_DIR/data-files/archive/"
           cp .github/scripts/save-to-data-branch.sh "$RUNNER_TEMP_DIR/"
           bash "$RUNNER_TEMP_DIR/save-to-data-branch.sh" "Edition $DAY" "$RUNNER_TEMP_DIR/data-files"
