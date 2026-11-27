@@ -14,7 +14,7 @@ from .safety import safe_href
 
 log = logging.getLogger(__name__)
 
-REPO_URL = "https://github.com/omparikh813/Security-News-Daily"
+REPO_URL = "https://github.com/omparikh813/MalNews"
 SITE_FILES = ("index.css", "app.js", "theme.js", "favicon.svg")
 SEVERITY_LABELS = ("Critical", "High", "Medium", "Low", "None", "Pending")
 SECTIONS = (("story_of_week", "Story of the Week"), ("news_of_the_day", "News of the Day"),

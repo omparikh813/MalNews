@@ -187,7 +187,7 @@ class OpenRouterClient:
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "X-Title": "MalNews",
-                    "HTTP-Referer": "https://github.com/omparikh813/security-news-daily",
+                    "HTTP-Referer": "https://github.com/omparikh813/MalNews",
                 },
                 json=self.payload(system, user, max_tokens),
                 timeout=self.cfg.timeout_seconds,

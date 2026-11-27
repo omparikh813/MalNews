@@ -89,7 +89,7 @@ When it finishes, open the run: the job summary shows the counts, and the `githu
 you can download and open. If the summary looks right, run it again with *Publish* **on**.
 
 **6. Open your site:** `https://<your-username>.github.io/<repo-name>/`
-(for example `https://omparikh813.github.io/security-news-daily/`). `latest.pdf` is today's edition and
+(for example `https://omparikh813.github.io/MalNews/`). `latest.pdf` is today's edition and
 `index.html` lists every past one. The schedule now runs by itself every day.
 
 **If something fails**
